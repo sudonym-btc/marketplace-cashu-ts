@@ -268,11 +268,18 @@ export function createCashuEscrowPolicy(options: CashuEscrowPolicyOptions): Cash
           }
           return
         }
+        if (anyProofPending(states)) {
+          yield {
+            type: 'progress',
+            status: 'Cashu proofs are pending at the mint',
+            data: { mint: data.mint, unit: data.unit, states },
+          }
+          return
+        }
         yield {
-          type: anyProofPending(states) ? 'progress' : 'noop',
-          status: anyProofPending(states) ? 'Cashu proofs are pending at the mint' : undefined,
+          type: 'noop',
           data: { mint: data.mint, unit: data.unit, states },
-        } as never
+        }
       } catch (error) {
         yield {
           type: 'noop',

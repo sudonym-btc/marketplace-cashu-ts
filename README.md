@@ -29,10 +29,17 @@ const cashuEscrowPolicy = createCashuEscrowPolicy({
 
 `pay(intent)` creates a Cashu BOLT11 mint quote, yields a `payment_required`
 state with the invoice, waits for the quote to be paid, then mints P2PK-locked
-escrow proofs and yields a `paid` state with a Cashu payment proof.
+escrow proofs and yields a `paid` state with a Cashu payment proof. The proof
+contains the stable policy hash for marketplace routing and a separate
+condition hash for the concrete buyer/seller/escrow/locktime construction.
 
 `recover(payment)` checks the proof state at the mint and returns progress or
-recovered states. Cashu recovery from lost mint responses will use deterministic
-restore outputs in the next iteration; this first policy stores quote state so
-in-flight browser sessions can resume without coupling the marketplace app to
-Cashu internals.
+recovered states. Published payments can be recovered from the payment proof
+without device-local Cashu knowledge; in-flight quotes are also stored through
+the supplied storage interface so a browser session can resume without coupling
+the marketplace app to Cashu internals.
+
+The package expects participant identities to provide Cashu P2PK keys through
+`data.cashuPubkey`, `data.cashuP2pkPubkey`, `data.p2pkPubkey`, or `address`.
+The marketplace/Nostr layer decides how those identities are represented in
+events; this package only receives the resolved intent.
