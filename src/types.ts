@@ -1,3 +1,24 @@
+import type {
+  MarketplaceDriverAmount,
+  MarketplaceDriverAuctionPolicy,
+  MarketplaceDriverAuctionSettlementIntent,
+  MarketplaceDriverAuctionSettlementResult,
+  MarketplaceDriverBolt11PaymentRequest,
+  MarketplaceDriverOrderPolicy,
+  MarketplaceDriverIdentity,
+  MarketplaceDriverPaymentIntent,
+  MarketplaceDriverPaymentProof,
+  MarketplaceDriverPaymentState,
+  MarketplaceDriverRecoveryItem,
+  MarketplaceDriverRecoveryState,
+  MarketplaceDriverStartContext,
+  MarketplaceDriverStartResult,
+  MarketplaceDriverValidationRequest,
+  MarketplaceDriverValidationResult,
+  MarketplaceDriverWatermarkContext,
+  MarketplaceDriverWatermarkDiscovery,
+} from '@sudonym-btc/marketplace-driver-interface'
+
 export type CashuAmount = {
   value: bigint
   denomination: string
@@ -53,73 +74,11 @@ export type CashuPaymentAsset = {
   }
 }
 
-export type GenericPaymentIdentity = {
-  pubkey?: string
-  address?: string
-  data?: Record<string, unknown>
-}
-
-export type GenericPaymentIntent = {
-  method: string
-  subject: 'order' | 'bid'
-  tradeId: string
-  settlementId: string
-  accountIndex: number
-  seed?: string
-  amount: {
-    value: string
-    denomination: string
-    decimals: number
-  }
-  fee: {
-    value: string
-    denomination: string
-    decimals: number
-  }
-  asset: {
-    method: string
-    assetId: string
-    denomination: string
-    decimals: number
-    data?: Record<string, unknown>
-  }
-  policy: {
-    method: string
-    id: string
-    type?: string
-    hash?: string
-    data?: Record<string, unknown>
-  }
-  contract: {
-    type: string
-    params: Record<string, unknown>
-  }
-  participants: {
-    buyer?: GenericPaymentIdentity
-    seller: GenericPaymentIdentity
-    escrow: GenericPaymentIdentity
-  }
-  unlockAt: number
-  metadata?: Record<string, unknown>
-}
-
-export type GenericPaymentProof = {
-  method: string
-  params: Record<string, unknown>
-}
-
-export type GenericBolt11PaymentRequest = {
-  type: 'bolt11'
-  bolt11: string
-  amount?: {
-    value: string
-    denomination: string
-    decimals: number
-  }
-  description?: string
-  expiresAt?: number
-  data?: Record<string, unknown>
-}
+export type GenericAmount = MarketplaceDriverAmount
+export type GenericPaymentIdentity = MarketplaceDriverIdentity
+export type GenericPaymentIntent = MarketplaceDriverPaymentIntent
+export type GenericPaymentProof = MarketplaceDriverPaymentProof
+export type GenericBolt11PaymentRequest = MarketplaceDriverBolt11PaymentRequest
 
 export type CashuPaymentAmountLimits = {
   source: 'cashu-mint'
@@ -143,113 +102,19 @@ export type CashuPaymentAmountLimits = {
   } | null
 }
 
-export type GenericPolicyPaymentState =
-  | {
-      type: 'payment_required'
-      request: GenericBolt11PaymentRequest
-      proof?: GenericPaymentProof | null
-      data?: Record<string, unknown>
-    }
-  | {
-      type: 'payment_progress'
-      status: string
-      proof?: GenericPaymentProof | null
-      data?: Record<string, unknown>
-    }
-  | {
-      type: 'paid'
-      proof: GenericPaymentProof
-      data?: Record<string, unknown>
-    }
-  | {
-      type: 'completed'
-      proof?: GenericPaymentProof | null
-      data?: Record<string, unknown>
-    }
-
-export type GenericPaymentValidationRequest = {
-  method: string
-  proof: GenericPaymentProof
-  expected: {
-    settlementId: string
-    tradeId?: string
-    amount?: {
-      value: string
-      denomination: string
-      decimals: number
-    }
-    asset?: {
-      denomination?: string
-      decimals?: number
-      assetId?: string
-    }
-    contract?: {
-      chainId?: number
-      address?: string
-      bytecodeHash?: string
-      params?: Record<string, unknown>
-    }
-    participants?: {
-      buyer?: GenericPaymentIdentity
-      seller?: GenericPaymentIdentity
-      escrow?: GenericPaymentIdentity
-    }
-    fee?: {
-      value: string
-      denomination: string
-      decimals: number
-    }
-  }
-  now?: number
-}
-
-export type GenericPaymentValidationResult = {
-  method: 'cashu'
-  status: 'valid' | 'invalid' | 'pending' | 'expired' | 'unverifiable'
-  confirmations?: number
-  amountMatched?: boolean
-  assetMatched?: boolean
-  recipientMatched?: boolean
-  escrowMatched?: boolean
-  data?: Record<string, unknown>
-  error?: string
-}
-
-export type GenericPaymentRecoveryItem = {
-  subject: 'order' | 'bid'
-  group?: unknown
-  payment?: unknown
-  proof: GenericPaymentProof
-  expected?: GenericPaymentValidationRequest['expected']
-}
-
-export type GenericPaymentRecoveryState =
-  | { type: 'noop'; data?: Record<string, unknown> }
-  | { type: 'progress'; status: string; data?: Record<string, unknown> }
-  | { type: 'recovered'; data?: Record<string, unknown> }
-
-export type GenericAuctionSettlementIntent = {
-  subject: 'bid'
-  action: 'auction_refund' | 'auction_promote'
-  group?: unknown
-  payment?: unknown
-  proof: GenericPaymentProof
-  expected?: GenericPaymentValidationRequest['expected']
-  validation?: unknown
-  refundPercent?: number
-  targetTradeId?: string
-  targetOrderGroupId?: string
-  targetUnlockAt?: number
-  recycleArgs?: unknown
-  data?: Record<string, unknown>
-}
-
-export type GenericAuctionSettlementResult = {
-  proof: GenericPaymentProof
-  inputs?: Array<Record<string, unknown>>
-  outputs?: Array<Record<string, unknown>>
-  data?: Record<string, unknown>
-}
+export type GenericPolicyPaymentState = MarketplaceDriverPaymentState<GenericPaymentProof>
+export type GenericPaymentValidationRequest = MarketplaceDriverValidationRequest
+export type GenericPaymentValidationResult = MarketplaceDriverValidationResult & { method: 'cashu' }
+export type GenericPaymentRecoveryItem = MarketplaceDriverRecoveryItem<
+  GenericPaymentProof,
+  GenericPaymentValidationRequest['expected']
+>
+export type GenericPaymentRecoveryState = Exclude<MarketplaceDriverRecoveryState<GenericPaymentProof>, { type: 'settlement_ready' }>
+export type GenericAuctionSettlementIntent = MarketplaceDriverAuctionSettlementIntent<
+  GenericPaymentProof,
+  GenericPaymentValidationRequest['expected']
+>
+export type GenericAuctionSettlementResult = MarketplaceDriverAuctionSettlementResult<GenericPaymentProof>
 
 export type CashuEscrowPolicyState = {
   enabled: boolean
@@ -261,19 +126,22 @@ export type CashuEscrowPolicyState = {
 
 export type CashuAuctionPolicyState = CashuEscrowPolicyState
 
-export type CashuEscrowPolicy = {
+export type CashuEscrowPolicy = MarketplaceDriverOrderPolicy<
+  GenericPolicyPaymentState,
+  CashuEscrowPaymentPolicy,
+  CashuPaymentAsset,
+  GenericPaymentIntent,
+  GenericPaymentValidationRequest,
+  GenericPaymentValidationResult,
+  GenericPaymentRecoveryItem,
+  GenericPaymentRecoveryState
+> & {
   method: 'cashu'
   id: 'cashu:p2pk-escrow-v1'
-  subject: 'order'
-  family: 'escrow'
   policies(): CashuEscrowPaymentPolicy[]
   assets(): CashuPaymentAsset[]
-  discoverHighWatermark(context: {
-    seed: string
-    highWaterMark: number
-    unusedWindow: number
-    now?: number
-  }): Promise<{
+  discoverHighWatermark(context: MarketplaceDriverWatermarkContext): Promise<
+    MarketplaceDriverWatermarkDiscovery & {
     policy: 'cashu:p2pk-escrow-v1'
     maxUsedIndex: number
     nextUnusedIndex: number
@@ -283,14 +151,8 @@ export type CashuEscrowPolicy = {
     usedIndexes: number[]
     recoveryActions: unknown[]
   }>
-  startup(context: {
-    seed: string
-    highWaterMark: number
-    nextUnusedIndex: number
-    unusedWindow: number
-    discovery: unknown
-    now?: number
-  }): Promise<{
+  startup(context: MarketplaceDriverStartContext): Promise<
+    MarketplaceDriverStartResult & {
     policy: 'cashu:p2pk-escrow-v1'
     data: Record<string, unknown>
   }>
@@ -300,19 +162,24 @@ export type CashuEscrowPolicy = {
   state(): CashuEscrowPolicyState
 }
 
-export type CashuAuctionPolicy = {
+export type CashuAuctionPolicy = MarketplaceDriverAuctionPolicy<
+  GenericPolicyPaymentState,
+  CashuAuctionPaymentPolicy,
+  CashuPaymentAsset,
+  GenericPaymentIntent,
+  GenericPaymentValidationRequest,
+  GenericPaymentValidationResult,
+  GenericPaymentRecoveryItem,
+  GenericPaymentRecoveryState,
+  GenericAuctionSettlementIntent,
+  GenericAuctionSettlementResult
+> & {
   method: 'cashu'
   id: 'cashu:p2pk-auction-v1'
-  subject: 'bid'
-  family: 'auction'
   policies(): CashuAuctionPaymentPolicy[]
   assets(): CashuPaymentAsset[]
-  discoverHighWatermark(context: {
-    seed: string
-    highWaterMark: number
-    unusedWindow: number
-    now?: number
-  }): Promise<{
+  discoverHighWatermark(context: MarketplaceDriverWatermarkContext): Promise<
+    MarketplaceDriverWatermarkDiscovery & {
     policy: 'cashu:p2pk-auction-v1'
     maxUsedIndex: number
     nextUnusedIndex: number
@@ -322,14 +189,8 @@ export type CashuAuctionPolicy = {
     usedIndexes: number[]
     recoveryActions: unknown[]
   }>
-  startup(context: {
-    seed: string
-    highWaterMark: number
-    nextUnusedIndex: number
-    unusedWindow: number
-    discovery: unknown
-    now?: number
-  }): Promise<{
+  startup(context: MarketplaceDriverStartContext): Promise<
+    MarketplaceDriverStartResult & {
     policy: 'cashu:p2pk-auction-v1'
     data: Record<string, unknown>
   }>
