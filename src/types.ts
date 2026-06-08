@@ -14,7 +14,7 @@ export type CashuMintConfig = {
   data?: Record<string, unknown>
 }
 
-export type CashuPaymentPolicy = {
+export type CashuEscrowPaymentPolicy = {
   method: 'cashu'
   id: string
   type: 'cashu:p2pk-escrow-v1'
@@ -25,6 +25,20 @@ export type CashuPaymentPolicy = {
     [key: string]: unknown
   }
 }
+
+export type CashuAuctionPaymentPolicy = {
+  method: 'cashu'
+  id: string
+  type: 'cashu:p2pk-auction-v1'
+  hash: string
+  data: {
+    mintUrl: string
+    unit: string
+    [key: string]: unknown
+  }
+}
+
+export type CashuPaymentPolicy = CashuEscrowPaymentPolicy | CashuAuctionPaymentPolicy
 
 export type CashuPaymentAsset = {
   method: 'cashu'
@@ -107,6 +121,28 @@ export type GenericBolt11PaymentRequest = {
   data?: Record<string, unknown>
 }
 
+export type CashuPaymentAmountLimits = {
+  source: 'cashu-mint'
+  method: 'bolt11'
+  mintUrl: string
+  unit: string
+  amount: {
+    value: string
+    denomination: string
+    decimals: number
+  }
+  min: {
+    value: string
+    denomination: string
+    decimals: number
+  } | null
+  max: {
+    value: string
+    denomination: string
+    decimals: number
+  } | null
+}
+
 export type GenericPolicyPaymentState =
   | {
       type: 'payment_required'
@@ -147,6 +183,12 @@ export type GenericPaymentValidationRequest = {
       decimals?: number
       assetId?: string
     }
+    contract?: {
+      chainId?: number
+      address?: string
+      bytecodeHash?: string
+      params?: Record<string, unknown>
+    }
     participants?: {
       buyer?: GenericPaymentIdentity
       seller?: GenericPaymentIdentity
@@ -186,6 +228,29 @@ export type GenericPaymentRecoveryState =
   | { type: 'progress'; status: string; data?: Record<string, unknown> }
   | { type: 'recovered'; data?: Record<string, unknown> }
 
+export type GenericAuctionSettlementIntent = {
+  subject: 'bid'
+  action: 'auction_refund' | 'auction_promote'
+  group?: unknown
+  payment?: unknown
+  proof: GenericPaymentProof
+  expected?: GenericPaymentValidationRequest['expected']
+  validation?: unknown
+  refundPercent?: number
+  targetTradeId?: string
+  targetOrderGroupId?: string
+  targetUnlockAt?: number
+  recycleArgs?: unknown
+  data?: Record<string, unknown>
+}
+
+export type GenericAuctionSettlementResult = {
+  proof: GenericPaymentProof
+  inputs?: Array<Record<string, unknown>>
+  outputs?: Array<Record<string, unknown>>
+  data?: Record<string, unknown>
+}
+
 export type CashuEscrowPolicyState = {
   enabled: boolean
   started: boolean
@@ -194,12 +259,14 @@ export type CashuEscrowPolicyState = {
   error?: string
 }
 
+export type CashuAuctionPolicyState = CashuEscrowPolicyState
+
 export type CashuEscrowPolicy = {
   method: 'cashu'
   id: 'cashu:p2pk-escrow-v1'
   subject: 'order'
   family: 'escrow'
-  policies(): CashuPaymentPolicy[]
+  policies(): CashuEscrowPaymentPolicy[]
   assets(): CashuPaymentAsset[]
   discoverHighWatermark(context: {
     seed: string
@@ -231,4 +298,52 @@ export type CashuEscrowPolicy = {
   pay(intent: GenericPaymentIntent): AsyncIterable<GenericPolicyPaymentState>
   validatePayment(request: GenericPaymentValidationRequest): Promise<GenericPaymentValidationResult>
   state(): CashuEscrowPolicyState
+}
+
+export type CashuAuctionPolicy = {
+  method: 'cashu'
+  id: 'cashu:p2pk-auction-v1'
+  subject: 'bid'
+  family: 'auction'
+  policies(): CashuAuctionPaymentPolicy[]
+  assets(): CashuPaymentAsset[]
+  discoverHighWatermark(context: {
+    seed: string
+    highWaterMark: number
+    unusedWindow: number
+    now?: number
+  }): Promise<{
+    policy: 'cashu:p2pk-auction-v1'
+    maxUsedIndex: number
+    nextUnusedIndex: number
+    scannedFrom: number
+    scannedThrough: number
+    unusedWindow: number
+    usedIndexes: number[]
+    recoveryActions: unknown[]
+  }>
+  startup(context: {
+    seed: string
+    highWaterMark: number
+    nextUnusedIndex: number
+    unusedWindow: number
+    discovery: unknown
+    now?: number
+  }): Promise<{
+    policy: 'cashu:p2pk-auction-v1'
+    data: Record<string, unknown>
+  }>
+  recover(payment: GenericPaymentRecoveryItem): AsyncIterable<GenericPaymentRecoveryState>
+  pay(intent: GenericPaymentIntent): AsyncIterable<GenericPolicyPaymentState>
+  validatePayment(request: GenericPaymentValidationRequest): Promise<GenericPaymentValidationResult>
+  refundPayment(intent: GenericAuctionSettlementIntent & {
+    action: 'auction_refund'
+    refundPercent: number
+  }): Promise<GenericAuctionSettlementResult>
+  recyclePayment(intent: GenericAuctionSettlementIntent & {
+    action: 'auction_promote'
+    targetTradeId: string
+    targetOrderGroupId: string
+  }): Promise<GenericAuctionSettlementResult>
+  state(): CashuAuctionPolicyState
 }

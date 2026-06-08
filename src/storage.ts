@@ -8,7 +8,7 @@ export type CashuEscrowOperationStatus =
 
 export type CashuEscrowOperation = {
   id: string
-  kind: 'cashu_escrow_mint'
+  kind: 'cashu_escrow_mint' | 'cashu_auction_mint'
   status: CashuEscrowOperationStatus
   tradeId: string
   settlementId: string

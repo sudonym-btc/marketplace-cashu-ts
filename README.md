@@ -3,7 +3,7 @@
 Nostr-agnostic Cashu payment policy package for marketplace escrow flows.
 
 The package exports a structural `createCashuEscrowPolicy()` implementation
-that can be passed to `nostr-tools.marketplace.init({ orderPolicies: [...] })`.
+that can be passed to `nostr-tools.marketplace.session(pool, relays, signer, { orderPolicies: [...] })`.
 It does not import or know about Nostr events.
 
 The current policy is Cashu escrow only. Auction support will be added as a

@@ -8,13 +8,19 @@ import {
 } from '@cashu/cashu-ts'
 
 import {
-  MemoryCashuEscrowStore,
+  CashuPaymentAmountLimitError,
+  createCashuAuctionPolicy,
+  createCashuEscrowPolicy,
+} from '../dist/index.js'
+import { MemoryCashuEscrowStore } from '../dist/storage.js'
+import { deriveCashuEscrowKey } from '../dist/seed.js'
+import {
   canonicalCashuAssetId,
+  cashuAuctionPolicyHash,
+  cashuAuctionPolicyType,
   cashuEscrowPolicyHash,
   cashuEscrowPolicyType,
-  createCashuEscrowPolicy,
-  deriveCashuEscrowKey,
-} from '../dist/index.js'
+} from '../dist/marketplace/proof.js'
 
 const mint = {
   mintUrl: 'http://127.0.0.1:19338',
@@ -44,6 +50,25 @@ function createMockWallet() {
   }
   const wallet = {
     async loadMint() {},
+    getMintInfo() {
+      return {
+        isSupported(num) {
+          if (num === 4) {
+            return {
+              disabled: false,
+              params: [{
+                method: 'bolt11',
+                unit: mint.unit,
+                min_amount: null,
+                max_amount: null,
+                options: { description: true },
+              }],
+            }
+          }
+          return { supported: false }
+        },
+      }
+    },
     async createMintQuoteBolt11(amount, description) {
       calls.quoteAmounts.push(amount)
       calls.descriptions.push(description)
@@ -172,6 +197,15 @@ test('creates an escrow payment proof and validates unspent locked proofs', asyn
 
   assert.equal(states[0].type, 'payment_required')
   assert.equal(states[0].request.bolt11, 'lnbcrt1cashuescrow')
+  assert.deepEqual(states[0].request.data.limits, {
+    source: 'cashu-mint',
+    method: 'bolt11',
+    mintUrl: mint.mintUrl,
+    unit: mint.unit,
+    amount: { value: '12', denomination: 'SAT', decimals: 0 },
+    min: null,
+    max: null,
+  })
   assert.equal(states[1].type, 'payment_progress')
   assert.equal(states[2].type, 'payment_progress')
   assert.equal(states[3].type, 'paid')
@@ -206,6 +240,86 @@ test('creates an escrow payment proof and validates unspent locked proofs', asyn
   assert.equal(operation?.proofs?.length, 1)
 })
 
+test('rejects Cashu payments outside advertised mint limits before quote creation', async () => {
+  const seed = '2'.repeat(64)
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  wallet.getMintInfo = () => ({
+    isSupported(num) {
+      if (num === 4) {
+        return {
+          disabled: false,
+          params: [{
+            method: 'bolt11',
+            unit: mint.unit,
+            min_amount: 50,
+            max_amount: 1000,
+            options: { description: true },
+          }],
+        }
+      }
+      return { supported: false }
+    },
+  })
+  const policy = createCashuEscrowPolicy({
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    quotePollIntervalMs: 0,
+    quotePaymentTimeoutMs: 1_000,
+  })
+  const seller = deriveCashuEscrowKey('3'.repeat(64), {
+    accountIndex: 0,
+    mintUrl: mint.mintUrl,
+    unit: mint.unit,
+    role: 'settlement',
+  })
+  const escrow = deriveCashuEscrowKey('4'.repeat(64), {
+    accountIndex: 0,
+    mintUrl: mint.mintUrl,
+    unit: mint.unit,
+    role: 'settlement',
+  })
+  const intent = {
+    method: 'cashu',
+    subject: 'order',
+    tradeId: 'trade-low',
+    settlementId: 'order-low',
+    accountIndex: 9,
+    seed,
+    amount: { value: '10', denomination: 'SAT', decimals: 0 },
+    fee: { value: '2', denomination: 'SAT', decimals: 0 },
+    asset: {
+      method: 'cashu',
+      assetId: canonicalCashuAssetId(mint.mintUrl, mint.unit),
+      denomination: 'SAT',
+      decimals: 0,
+      data: { mintUrl: mint.mintUrl, unit: mint.unit },
+    },
+    policy: policy.policies()[0],
+    contract: { type: cashuEscrowPolicyType, params: {} },
+    participants: {
+      seller: { data: { cashuPubkey: seller.publicKey } },
+      escrow: { data: { cashuPubkey: escrow.publicKey } },
+    },
+    unlockAt: 1_800_000_000,
+  }
+
+  await assert.rejects(
+    async () => {
+      for await (const state of policy.pay(intent)) void state
+    },
+    error => {
+      assert.equal(error instanceof CashuPaymentAmountLimitError, true)
+      assert.equal(error.reason, 'below_minimum')
+      assert.equal(error.limits.min.value, '50')
+      assert.equal(error.limits.amount.value, '12')
+      return true
+    },
+  )
+  assert.deepEqual(calls.quoteAmounts, [])
+})
+
 test('uses a stable policy hash for routing and a separate condition hash for each trade', () => {
   const staticHash = cashuEscrowPolicyHash({ mintUrl: mint.mintUrl, unit: mint.unit })
   const tradeHash = cashuEscrowPolicyHash({
@@ -237,4 +351,106 @@ test('uses a stable policy hash for routing and a separate condition hash for ea
   assert.match(staticHash, /^0x[0-9a-f]{64}$/)
   assert.match(tradeHash, /^0x[0-9a-f]{64}$/)
   assert.notEqual(staticHash, tradeHash)
+})
+
+test('creates an auction bid proof with the same Cashu payment shape', async () => {
+  const seed = '8'.repeat(64)
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  const policy = createCashuAuctionPolicy({
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    quotePollIntervalMs: 0,
+    quotePaymentTimeoutMs: 1_000,
+    now: () => 1_777_000_000_000,
+  })
+  const seller = deriveCashuEscrowKey('9'.repeat(64), {
+    accountIndex: 0,
+    mintUrl: mint.mintUrl,
+    unit: mint.unit,
+    role: 'settlement',
+  })
+  const escrow = deriveCashuEscrowKey('a'.repeat(64), {
+    accountIndex: 0,
+    mintUrl: mint.mintUrl,
+    unit: mint.unit,
+    role: 'settlement',
+  })
+  const intent = {
+    method: 'cashu',
+    subject: 'bid',
+    tradeId: 'auction-trade-1',
+    settlementId: '0'.repeat(64),
+    accountIndex: 10,
+    seed,
+    amount: { value: '1500', denomination: 'SAT', decimals: 0 },
+    fee: { value: '0', denomination: 'SAT', decimals: 0 },
+    asset: {
+      method: 'cashu',
+      assetId: canonicalCashuAssetId(mint.mintUrl, mint.unit),
+      denomination: 'SAT',
+      decimals: 0,
+      data: { mintUrl: mint.mintUrl, unit: mint.unit },
+    },
+    policy: policy.policies()[0],
+    contract: { type: cashuAuctionPolicyType, params: {} },
+    participants: {
+      seller: { data: { cashuPubkey: seller.publicKey } },
+      escrow: { data: { cashuPubkey: escrow.publicKey } },
+    },
+    unlockAt: 1_800_000_000,
+  }
+
+  const states = []
+  for await (const state of policy.pay(intent)) states.push(state)
+
+  assert.equal(states[0].type, 'payment_required')
+  assert.equal(states[3].type, 'paid')
+  assert.equal(calls.quoteAmounts[0], 1500n)
+  assert.equal(calls.p2pkOptions[0].requiredSignatures, 2)
+  assert.equal(calls.p2pkOptions[0].requiredRefundSignatures ?? 1, 1)
+  assert.equal(calls.p2pkOptions[0].sigFlag, 'SIG_ALL')
+
+  const buyer = deriveCashuEscrowKey(seed, {
+    accountIndex: intent.accountIndex,
+    mintUrl: mint.mintUrl,
+    unit: mint.unit,
+    role: 'buyer',
+  })
+  const lockKeys = Array.isArray(calls.p2pkOptions[0].pubkey)
+    ? calls.p2pkOptions[0].pubkey
+    : [calls.p2pkOptions[0].pubkey]
+  assert.deepEqual(lockKeys, [buyer.publicKey, escrow.publicKey])
+  assert.deepEqual(calls.p2pkOptions[0].refundKeys, [buyer.publicKey])
+  assert.ok(calls.p2pkOptions[0].additionalTags.some(tag => tag[0] === 'seller' && tag[1] === seller.publicKey))
+
+  const proof = states[3].proof
+  assert.equal(proof.params.policyType, cashuAuctionPolicyType)
+  assert.equal(proof.params.policyHash, cashuAuctionPolicyHash({ mintUrl: mint.mintUrl, unit: mint.unit }))
+  assert.equal(proof.params.recycleArgs.type, 'cashu:p2pk-auction-promote-v1')
+  assert.equal(proof.params.recycleArgs.signerPubkey, buyer.publicKey)
+  assert.equal(proof.params.recycleArgs.target.settlementId, `${intent.settlementId}:escrow`)
+  assert.equal(proof.params.recycleArgs.target.participants.buyerPubkey, buyer.publicKey)
+  assert.match(proof.params.recycleArgs.signature, /^[0-9a-f]{128}$/)
+
+  const validation = await policy.validatePayment({
+    method: 'cashu',
+    proof,
+    expected: {
+      settlementId: intent.settlementId,
+      tradeId: intent.tradeId,
+      amount: intent.amount,
+      fee: intent.fee,
+      asset: { assetId: intent.asset.assetId, denomination: 'SAT', decimals: 0 },
+    },
+  })
+  assert.equal(validation.status, 'valid')
+  assert.equal(validation.amountMatched, true)
+  assert.equal(validation.assetMatched, true)
+  assert.equal(validation.escrowMatched, true)
+
+  const operation = await store.get('cashu-auction-0000000000000000000000000000000000000000000000000000000000000000-10')
+  assert.equal(operation?.kind, 'cashu_auction_mint')
+  assert.equal(operation?.status, 'completed')
 })

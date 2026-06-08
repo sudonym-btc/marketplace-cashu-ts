@@ -20,13 +20,13 @@
       "types": "./dist/marketplace/index.d.ts",
       "import": "./dist/marketplace/index.js"
     },
-    "./seed": {
-      "types": "./dist/seed.d.ts",
-      "import": "./dist/seed.js"
+    "./escrow": {
+      "types": "./dist/escrow/index.d.ts",
+      "import": "./dist/escrow/index.js"
     },
-    "./storage": {
-      "types": "./dist/storage.d.ts",
-      "import": "./dist/storage.js"
+    "./auction": {
+      "types": "./dist/auction/index.d.ts",
+      "import": "./dist/auction/index.js"
     }
   },
   "scripts": {

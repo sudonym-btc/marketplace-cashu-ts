@@ -1,4 +1,44 @@
-export * from './marketplace/index.js'
-export * from './seed.js'
-export * from './storage.js'
-export * from './types.js'
+export * as auction from './auction/index.js'
+export * as escrow from './escrow/index.js'
+
+export {
+  CashuPaymentAmountLimitError,
+  createCashuAuctionPolicy,
+  createCashuEscrowPolicy,
+} from './marketplace/escrowPolicy.js'
+
+export type {
+  CashuAuctionPolicyOptions,
+  CashuEscrowPolicyOptions,
+  CashuMarketplacePolicyOptions,
+} from './marketplace/escrowPolicy.js'
+export type {
+  CashuAuctionPaymentPolicy,
+  CashuAuctionPolicy,
+  CashuAuctionPolicyState,
+  CashuAmount,
+  CashuEscrowPaymentPolicy,
+  CashuEscrowPolicy,
+  CashuEscrowPolicyState,
+  CashuMintConfig,
+  CashuPaymentAmountLimits,
+  CashuPaymentAsset,
+  CashuPaymentPolicy,
+  GenericAuctionSettlementIntent,
+  GenericAuctionSettlementResult,
+  GenericBolt11PaymentRequest,
+  GenericPaymentIdentity,
+  GenericPaymentIntent,
+  GenericPaymentProof,
+  GenericPaymentRecoveryItem,
+  GenericPaymentRecoveryState,
+  GenericPaymentValidationRequest,
+  GenericPaymentValidationResult,
+  GenericPolicyPaymentState,
+} from './types.js'
+export type {
+  CashuEscrowOperation,
+  CashuEscrowOperationQuery,
+  CashuEscrowOperationStatus,
+  CashuEscrowStorage,
+} from './storage.js'

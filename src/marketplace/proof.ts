@@ -5,16 +5,21 @@ import {
   parseP2PKSecret,
   serializeProofs,
   sumProofs,
+  type P2PKTag,
   type Proof,
   type Wallet,
 } from '@cashu/cashu-ts'
+import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { bytesToHex } from '@noble/hashes/utils.js'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 
 import type { CashuAmount, GenericPaymentProof } from '../types.js'
 import { normalizePublicKey } from '../utils/hex.js'
 
 export const cashuEscrowPolicyType = 'cashu:p2pk-escrow-v1' as const
+export const cashuAuctionPolicyType = 'cashu:p2pk-auction-v1' as const
+
+export type CashuP2pkPolicyType = typeof cashuEscrowPolicyType | typeof cashuAuctionPolicyType
 
 export type CashuEscrowParticipants = {
   buyerPubkey: string
@@ -26,20 +31,40 @@ export type CashuEscrowPolicyInput = CashuEscrowParticipants & {
   tradeId: string
   settlementId: string
   locktime: number
+  policyType?: CashuP2pkPolicyType
+}
+
+export type CashuRecycleArgs = {
+  version: 1
+  type: 'cashu:p2pk-auction-promote-v1'
+  fromPolicyType: typeof cashuAuctionPolicyType
+  toPolicyType: typeof cashuEscrowPolicyType
+  message: string
+  messageHash: string
+  signerPubkey: string
+  signature: string
+  target: {
+    tradeId: string
+    settlementId: string
+    locktime: number
+    participants: CashuEscrowParticipants
+    order?: Record<string, unknown>
+  }
 }
 
 export function canonicalCashuAssetId(mintUrl: string, unit: string): string {
   return `cashu:${unit}:${mintUrl}`
 }
 
-export function cashuEscrowPolicyHash(input: {
+function cashuP2pkPolicyHash(input: {
+  policyType: CashuP2pkPolicyType
   mintUrl: string
   unit: string
   locktime?: number
   participants?: CashuEscrowParticipants
 }): string {
   const payload = JSON.stringify({
-    type: cashuEscrowPolicyType,
+    type: input.policyType,
     mintUrl: input.mintUrl,
     unit: input.unit,
     ...(input.locktime !== undefined ? { locktime: input.locktime } : {}),
@@ -56,6 +81,35 @@ export function cashuEscrowPolicyHash(input: {
   return `0x${bytesToHex(sha256(new TextEncoder().encode(payload)))}`
 }
 
+export function cashuEscrowPolicyHash(input: {
+  mintUrl: string
+  unit: string
+  locktime?: number
+  participants?: CashuEscrowParticipants
+}): string {
+  return cashuP2pkPolicyHash({ ...input, policyType: cashuEscrowPolicyType })
+}
+
+export function cashuAuctionPolicyHash(input: {
+  mintUrl: string
+  unit: string
+  locktime?: number
+  participants?: CashuEscrowParticipants
+}): string {
+  return cashuP2pkPolicyHash({ ...input, policyType: cashuAuctionPolicyType })
+}
+
+function p2pkTags(input: CashuEscrowPolicyInput, tag: 'escrow' | 'auction', policyType: CashuP2pkPolicyType): P2PKTag[] {
+  const tags: P2PKTag[] = [
+    ['marketplace', tag],
+    ['trade', input.tradeId],
+    ['settlement', input.settlementId],
+    ['policy', policyType],
+  ]
+  if (tag === 'auction') tags.push(['seller', normalizePublicKey(input.sellerPubkey, 'seller cashu pubkey')])
+  return tags
+}
+
 export function cashuEscrowP2pkOptions(input: CashuEscrowPolicyInput) {
   return new P2PKBuilder()
     .addLockPubkey([
@@ -68,12 +122,22 @@ export function cashuEscrowP2pkOptions(input: CashuEscrowPolicyInput) {
     .requireRefundSignatures(1)
     .lockUntil(input.locktime)
     .sigAll()
-    .addTags([
-      ['marketplace', 'escrow'],
-      ['trade', input.tradeId],
-      ['settlement', input.settlementId],
-      ['policy', cashuEscrowPolicyType],
+    .addTags(p2pkTags(input, 'escrow', cashuEscrowPolicyType))
+    .toOptions()
+}
+
+export function cashuAuctionP2pkOptions(input: CashuEscrowPolicyInput) {
+  return new P2PKBuilder()
+    .addLockPubkey([
+      normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
+      normalizePublicKey(input.escrowPubkey, 'escrow cashu pubkey'),
     ])
+    .requireLockSignatures(2)
+    .addRefundPubkey(normalizePublicKey(input.buyerPubkey, 'buyer cashu refund pubkey'))
+    .requireRefundSignatures(1)
+    .lockUntil(input.locktime)
+    .sigAll()
+    .addTags(p2pkTags(input, 'auction', cashuAuctionPolicyType))
     .toOptions()
 }
 
@@ -85,11 +149,20 @@ export function proofPolicyMatches(
     const secret = parseP2PKSecret(proof.secret)
     if (secret[0] !== 'P2PK') return false
     const tags = secret[1].tags ?? []
-    const expectedKeys = [
-      normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
-      normalizePublicKey(input.sellerPubkey, 'seller cashu pubkey'),
-      normalizePublicKey(input.escrowPubkey, 'escrow cashu pubkey'),
-    ]
+    const policyType = tags.find(tag => tag[0] === 'policy')?.[1]
+    const expectedPolicy = input.policyType ?? cashuEscrowPolicyType
+    if (policyType !== expectedPolicy) return false
+    const isAuction = expectedPolicy === cashuAuctionPolicyType
+    const expectedKeys = isAuction
+      ? [
+          normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
+          normalizePublicKey(input.escrowPubkey, 'escrow cashu pubkey'),
+        ]
+      : [
+          normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
+          normalizePublicKey(input.sellerPubkey, 'seller cashu pubkey'),
+          normalizePublicKey(input.escrowPubkey, 'escrow cashu pubkey'),
+        ]
     const lockKey = normalizePublicKey(secret[1].data, 'proof lock pubkey')
     if (!expectedKeys.includes(lockKey)) return false
     const additionalLockKeys = tags
@@ -105,7 +178,10 @@ export function proofPolicyMatches(
     const sigFlag = tags.find(tag => tag[0] === 'sigflag')?.[1]
     if (sigFlag !== 'SIG_ALL') return false
     const refund = tags.filter(tag => tag[0] === 'refund').map(tag => tag[1])
-    if (!refund.includes(normalizePublicKey(input.sellerPubkey, 'seller cashu refund pubkey'))) return false
+    const expectedRefund = isAuction
+      ? normalizePublicKey(input.buyerPubkey, 'buyer cashu refund pubkey')
+      : normalizePublicKey(input.sellerPubkey, 'seller cashu refund pubkey')
+    if (!refund.includes(expectedRefund)) return false
     const tradeId = tags.find(tag => tag[0] === 'trade')?.[1]
     if (tradeId !== input.tradeId) return false
     const settlementId = tags.find(tag => tag[0] === 'settlement')?.[1]
@@ -116,7 +192,45 @@ export function proofPolicyMatches(
   }
 }
 
+export function cashuPromotionAuthorization(input: {
+  buyerPrivateKey: string
+  buyerPubkey: string
+  tradeId: string
+  settlementId: string
+  locktime: number
+  participants: CashuEscrowParticipants
+  order?: Record<string, unknown>
+}): CashuRecycleArgs {
+  const target = {
+    tradeId: input.tradeId,
+    settlementId: `${input.settlementId}:escrow`,
+    locktime: input.locktime,
+    participants: input.participants,
+    ...(input.order && Object.keys(input.order).length > 0 ? { order: input.order } : {}),
+  }
+  const message = JSON.stringify({
+    version: 1,
+    type: 'cashu:p2pk-auction-promote-v1',
+    fromPolicyType: cashuAuctionPolicyType,
+    toPolicyType: cashuEscrowPolicyType,
+    target,
+  })
+  const digest = sha256(new TextEncoder().encode(message))
+  return {
+    version: 1,
+    type: 'cashu:p2pk-auction-promote-v1',
+    fromPolicyType: cashuAuctionPolicyType,
+    toPolicyType: cashuEscrowPolicyType,
+    message,
+    messageHash: `0x${bytesToHex(digest)}`,
+    signerPubkey: normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
+    signature: bytesToHex(schnorr.sign(digest, hexToBytes(input.buyerPrivateKey))),
+    target,
+  }
+}
+
 export function cashuPaymentProof(input: {
+  policyType?: CashuP2pkPolicyType
   mintUrl: string
   unit: string
   amount: CashuAmount
@@ -129,14 +243,17 @@ export function cashuPaymentProof(input: {
   locktime: number
   policyHash: string
   conditionHash: string
+  recycleArgs?: CashuRecycleArgs
 }): GenericPaymentProof {
+  const policyType = input.policyType ?? cashuEscrowPolicyType
   return {
     method: 'cashu',
     params: {
       version: 1,
-      policyType: cashuEscrowPolicyType,
+      policyType,
       policyHash: input.policyHash,
       conditionHash: input.conditionHash,
+      ...(input.recycleArgs ? { recycleArgs: input.recycleArgs } : {}),
       mint: input.mintUrl,
       unit: input.unit,
       amount: input.amount.value.toString(),
