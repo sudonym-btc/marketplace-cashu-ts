@@ -30,8 +30,17 @@ const cashuEscrowPolicy = createCashuEscrowPolicy({
 `pay(intent)` creates a Cashu BOLT11 mint quote, yields a `payment_required`
 state with the invoice, waits for the quote to be paid, then mints P2PK-locked
 escrow proofs and yields a `paid` state with a Cashu payment proof. The proof
-contains the stable policy hash for marketplace routing and a separate
-condition hash for the concrete buyer/seller/escrow/locktime construction.
+contains the stable policy hash for marketplace routing, a separate condition
+hash for the concrete buyer/seller/escrow/locktime construction, and
+self-contained params for validation: mint, unit, funded `amount`,
+`paymentAmount`, `escrowFee`, participants, locktime, and serialized proofs.
+
+The validator does not require order or bid context. It resolves the proof
+params, decrypting them through the shared driver `decryptParams` hook when
+necessary, checks the Cashu proofs and P2PK policy, then returns the verified
+`paymentAmount`. SAT-denominated proof amounts are exposed as BTC base units
+(`denomination: "BTC"`, `decimals: 8`) for Nostr-facing payment data while the
+Cashu mint `unit` remains `sat`.
 
 `recover(payment)` checks the proof state at the mint and returns progress or
 recovered states. Published payments can be recovered from the payment proof

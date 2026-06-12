@@ -1,5 +1,7 @@
 import {
+  Amount,
   CheckStateEnum,
+  OutputData,
   P2PKBuilder,
   deserializeProofs,
   parseP2PKSecret,
@@ -7,11 +9,14 @@ import {
   sumProofs,
   type P2PKTag,
   type Proof,
+  type SerializedOutputData,
+  type SwapPreview,
   type Wallet,
 } from '@cashu/cashu-ts'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
+import { isMarketplaceDriverEncryptedPaymentProofParams } from '@sudonym-btc/marketplace-driver-interface'
 
 import type { CashuAmount, GenericPaymentProof } from '../types.js'
 import { normalizePublicKey } from '../utils/hex.js'
@@ -24,7 +29,7 @@ export type CashuP2pkPolicyType = typeof cashuEscrowPolicyType | typeof cashuAuc
 export type CashuEscrowParticipants = {
   buyerPubkey: string
   sellerPubkey: string
-  escrowPubkey: string
+  arbiterPubkey: string
 }
 
 export type CashuEscrowPolicyInput = CashuEscrowParticipants & {
@@ -39,6 +44,11 @@ export type CashuRecycleArgs = {
   type: 'cashu:p2pk-auction-promote-v1'
   fromPolicyType: typeof cashuAuctionPolicyType
   toPolicyType: typeof cashuEscrowPolicyType
+  source: {
+    tradeId: string
+    settlementId: string
+    policyType: typeof cashuAuctionPolicyType
+  }
   message: string
   messageHash: string
   signerPubkey: string
@@ -46,10 +56,26 @@ export type CashuRecycleArgs = {
   target: {
     tradeId: string
     settlementId: string
+    policyType: typeof cashuEscrowPolicyType
+    policyHash: string
+    conditionHash: string
     locktime: number
     participants: CashuEscrowParticipants
+    p2pkOptions: ReturnType<typeof cashuEscrowP2pkOptions>
     order?: Record<string, unknown>
   }
+  swap?: CashuSerializedSwapPreview
+}
+
+export type CashuSerializedSwapPreview = {
+  version: 1
+  amount: string
+  fees: string
+  keysetId: string
+  inputs: string[]
+  sendOutputs: SerializedOutputData[]
+  keepOutputs: SerializedOutputData[]
+  unselectedProofs: string[]
 }
 
 export function canonicalCashuAssetId(mintUrl: string, unit: string): string {
@@ -73,7 +99,7 @@ function cashuP2pkPolicyHash(input: {
           participants: {
             buyerPubkey: normalizePublicKey(input.participants.buyerPubkey, 'buyer cashu pubkey'),
             sellerPubkey: normalizePublicKey(input.participants.sellerPubkey, 'seller cashu pubkey'),
-            escrowPubkey: normalizePublicKey(input.participants.escrowPubkey, 'escrow cashu pubkey'),
+            arbiterPubkey: normalizePublicKey(input.participants.arbiterPubkey, 'arbiter cashu pubkey'),
           },
         }
       : {}),
@@ -115,7 +141,7 @@ export function cashuEscrowP2pkOptions(input: CashuEscrowPolicyInput) {
     .addLockPubkey([
       normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
       normalizePublicKey(input.sellerPubkey, 'seller cashu pubkey'),
-      normalizePublicKey(input.escrowPubkey, 'escrow cashu pubkey'),
+      normalizePublicKey(input.arbiterPubkey, 'arbiter cashu pubkey'),
     ])
     .requireLockSignatures(2)
     .addRefundPubkey(normalizePublicKey(input.sellerPubkey, 'seller cashu refund pubkey'))
@@ -130,7 +156,7 @@ export function cashuAuctionP2pkOptions(input: CashuEscrowPolicyInput) {
   return new P2PKBuilder()
     .addLockPubkey([
       normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
-      normalizePublicKey(input.escrowPubkey, 'escrow cashu pubkey'),
+      normalizePublicKey(input.arbiterPubkey, 'arbiter cashu pubkey'),
     ])
     .requireLockSignatures(2)
     .addRefundPubkey(normalizePublicKey(input.buyerPubkey, 'buyer cashu refund pubkey'))
@@ -156,12 +182,12 @@ export function proofPolicyMatches(
     const expectedKeys = isAuction
       ? [
           normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
-          normalizePublicKey(input.escrowPubkey, 'escrow cashu pubkey'),
+          normalizePublicKey(input.arbiterPubkey, 'arbiter cashu pubkey'),
         ]
       : [
           normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
           normalizePublicKey(input.sellerPubkey, 'seller cashu pubkey'),
-          normalizePublicKey(input.escrowPubkey, 'escrow cashu pubkey'),
+          normalizePublicKey(input.arbiterPubkey, 'arbiter cashu pubkey'),
         ]
     const lockKey = normalizePublicKey(secret[1].data, 'proof lock pubkey')
     if (!expectedKeys.includes(lockKey)) return false
@@ -195,25 +221,26 @@ export function proofPolicyMatches(
 export function cashuPromotionAuthorization(input: {
   buyerPrivateKey: string
   buyerPubkey: string
-  tradeId: string
-  settlementId: string
-  locktime: number
-  participants: CashuEscrowParticipants
-  order?: Record<string, unknown>
+  source: CashuRecycleArgs['source']
+  target: CashuRecycleArgs['target']
+  swap?: CashuSerializedSwapPreview
 }): CashuRecycleArgs {
   const target = {
-    tradeId: input.tradeId,
-    settlementId: `${input.settlementId}:escrow`,
-    locktime: input.locktime,
-    participants: input.participants,
-    ...(input.order && Object.keys(input.order).length > 0 ? { order: input.order } : {}),
+    ...input.target,
+    participants: {
+      buyerPubkey: normalizePublicKey(input.target.participants.buyerPubkey, 'buyer cashu pubkey'),
+      sellerPubkey: normalizePublicKey(input.target.participants.sellerPubkey, 'seller cashu pubkey'),
+      arbiterPubkey: normalizePublicKey(input.target.participants.arbiterPubkey, 'arbiter cashu pubkey'),
+    },
   }
   const message = JSON.stringify({
     version: 1,
     type: 'cashu:p2pk-auction-promote-v1',
     fromPolicyType: cashuAuctionPolicyType,
     toPolicyType: cashuEscrowPolicyType,
+    source: input.source,
     target,
+    ...(input.swap ? { swap: input.swap } : {}),
   })
   const digest = sha256(new TextEncoder().encode(message))
   return {
@@ -221,11 +248,38 @@ export function cashuPromotionAuthorization(input: {
     type: 'cashu:p2pk-auction-promote-v1',
     fromPolicyType: cashuAuctionPolicyType,
     toPolicyType: cashuEscrowPolicyType,
+    source: input.source,
     message,
     messageHash: `0x${bytesToHex(digest)}`,
     signerPubkey: normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
     signature: bytesToHex(schnorr.sign(digest, hexToBytes(input.buyerPrivateKey))),
     target,
+    ...(input.swap ? { swap: input.swap } : {}),
+  }
+}
+
+export function serializeCashuSwapPreview(preview: SwapPreview): CashuSerializedSwapPreview {
+  return {
+    version: 1,
+    amount: preview.amount.toString(),
+    fees: preview.fees.toString(),
+    keysetId: preview.keysetId,
+    inputs: serializeProofs(preview.inputs),
+    sendOutputs: (preview.sendOutputs ?? []).map(output => OutputData.serialize(output)),
+    keepOutputs: (preview.keepOutputs ?? []).map(output => OutputData.serialize(output)),
+    unselectedProofs: serializeProofs(preview.unselectedProofs ?? []),
+  }
+}
+
+export function deserializeCashuSwapPreview(preview: CashuSerializedSwapPreview): SwapPreview {
+  return {
+    amount: Amount.from(preview.amount),
+    fees: Amount.from(preview.fees),
+    keysetId: preview.keysetId,
+    inputs: deserializeProofs(preview.inputs),
+    sendOutputs: preview.sendOutputs.map(output => OutputData.deserialize(output)),
+    keepOutputs: preview.keepOutputs.map(output => OutputData.deserialize(output)),
+    unselectedProofs: deserializeProofs(preview.unselectedProofs),
   }
 }
 
@@ -246,8 +300,12 @@ export function cashuPaymentProof(input: {
   recycleArgs?: CashuRecycleArgs
 }): GenericPaymentProof {
   const policyType = input.policyType ?? cashuEscrowPolicyType
+  const paymentAmount = input.amount.value - input.escrowFee.value
+  if (paymentAmount < 0n) throw new Error('Cashu escrow fee exceeds funded amount')
+  const publicDenomination = input.amount.denomination.toUpperCase() === 'SAT' ? 'BTC' : input.amount.denomination
+  const publicDecimals = publicDenomination.toUpperCase() === 'BTC' ? 8 : input.amount.decimals
   return {
-    method: 'cashu',
+    driver: policyType,
     params: {
       version: 1,
       policyType,
@@ -257,8 +315,9 @@ export function cashuPaymentProof(input: {
       mint: input.mintUrl,
       unit: input.unit,
       amount: input.amount.value.toString(),
-      denomination: input.amount.denomination,
-      decimals: input.amount.decimals,
+      paymentAmount: paymentAmount.toString(),
+      denomination: publicDenomination,
+      decimals: publicDecimals,
       escrowFee: input.escrowFee.value.toString(),
       tradeId: input.tradeId,
       settlementId: input.settlementId,
@@ -270,10 +329,21 @@ export function cashuPaymentProof(input: {
   }
 }
 
-export function proofsFromPaymentProof(proof: GenericPaymentProof): Proof[] {
-  const rawProofs = proof.params.proofs
+export function clearPaymentProofParams(proof: GenericPaymentProof): Record<string, unknown> {
+  if (isMarketplaceDriverEncryptedPaymentProofParams(proof.params)) {
+    throw new Error('Cashu payment proof params are encrypted')
+  }
+  return proof.params as Record<string, unknown>
+}
+
+export function proofsFromPaymentProofParams(params: Record<string, unknown>): Proof[] {
+  const rawProofs = params.proofs
   if (!Array.isArray(rawProofs)) throw new Error('Cashu payment proof is missing proofs')
   return deserializeProofs(rawProofs as string[])
+}
+
+export function proofsFromPaymentProof(proof: GenericPaymentProof): Proof[] {
+  return proofsFromPaymentProofParams(clearPaymentProofParams(proof))
 }
 
 export function proofAmount(proofs: Proof[]): bigint {

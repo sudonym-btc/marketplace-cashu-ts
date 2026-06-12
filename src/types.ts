@@ -13,6 +13,7 @@ import type {
   MarketplaceDriverRecoveryState,
   MarketplaceDriverStartContext,
   MarketplaceDriverStartResult,
+  MarketplaceDriverValidationExpected,
   MarketplaceDriverValidationRequest,
   MarketplaceDriverValidationResult,
   MarketplaceDriverWatermarkContext,
@@ -64,6 +65,7 @@ export type CashuPaymentPolicy = CashuEscrowPaymentPolicy | CashuAuctionPaymentP
 export type CashuPaymentAsset = {
   method: 'cashu'
   assetId: string
+  currency?: string
   denomination: string
   decimals: number
   appId?: string
@@ -104,15 +106,15 @@ export type CashuPaymentAmountLimits = {
 
 export type GenericPolicyPaymentState = MarketplaceDriverPaymentState<GenericPaymentProof>
 export type GenericPaymentValidationRequest = MarketplaceDriverValidationRequest
-export type GenericPaymentValidationResult = MarketplaceDriverValidationResult & { method: 'cashu' }
+export type GenericPaymentValidationResult = MarketplaceDriverValidationResult & { driver: 'cashu' }
 export type GenericPaymentRecoveryItem = MarketplaceDriverRecoveryItem<
   GenericPaymentProof,
-  GenericPaymentValidationRequest['expected']
+  MarketplaceDriverValidationExpected
 >
 export type GenericPaymentRecoveryState = Exclude<MarketplaceDriverRecoveryState<GenericPaymentProof>, { type: 'settlement_ready' }>
 export type GenericAuctionSettlementIntent = MarketplaceDriverAuctionSettlementIntent<
   GenericPaymentProof,
-  GenericPaymentValidationRequest['expected']
+  MarketplaceDriverValidationExpected
 >
 export type GenericAuctionSettlementResult = MarketplaceDriverAuctionSettlementResult<GenericPaymentProof>
 
