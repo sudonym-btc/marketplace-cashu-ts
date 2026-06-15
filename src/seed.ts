@@ -44,8 +44,6 @@ export function deriveCashuEscrowKey(
   seed: string,
   input: {
     accountIndex: number
-    mintUrl: string
-    unit: string
     role: 'buyer' | 'settlement' | 'fee'
     keyIndex?: number
   },
@@ -55,8 +53,6 @@ export function deriveCashuEscrowKey(
     utf8('marketplace-cashu-escrow-v1'),
     seedBytes,
     uint32Bytes(input.accountIndex),
-    utf8(input.mintUrl),
-    utf8(input.unit),
     utf8(input.role),
     uint32Bytes(input.keyIndex ?? 0),
   ))

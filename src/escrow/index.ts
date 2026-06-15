@@ -15,9 +15,11 @@ export type {
   GenericPaymentIdentity,
   GenericPaymentIntent,
   GenericPaymentProof,
-  GenericPaymentRecoveryItem,
-  GenericPaymentRecoveryState,
+  GenericPaymentSweepInput,
+  GenericPaymentSweepState,
   GenericPaymentValidationRequest,
   GenericPaymentValidationResult,
   GenericPolicyPaymentState,
+  GenericSwapResumeContext,
+  GenericSwapResumeState,
 } from '../types.js'

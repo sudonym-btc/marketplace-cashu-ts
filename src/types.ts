@@ -7,12 +7,16 @@ import type {
   MarketplaceDriverOrderPolicy,
   MarketplaceDriverIdentity,
   MarketplaceDriverPaymentIntent,
+  MarketplaceDriverPaymentSettlementIntent,
+  MarketplaceDriverPaymentSettlementState,
   MarketplaceDriverPaymentProof,
   MarketplaceDriverPaymentState,
-  MarketplaceDriverRecoveryItem,
-  MarketplaceDriverRecoveryState,
+  MarketplaceDriverPaymentSweepInput,
+  MarketplaceDriverPaymentSweepState,
   MarketplaceDriverStartContext,
   MarketplaceDriverStartResult,
+  MarketplaceDriverSwapResumeContext,
+  MarketplaceDriverSwapResumeState,
   MarketplaceDriverValidationExpected,
   MarketplaceDriverValidationRequest,
   MarketplaceDriverValidationResult,
@@ -107,11 +111,18 @@ export type CashuPaymentAmountLimits = {
 export type GenericPolicyPaymentState = MarketplaceDriverPaymentState<GenericPaymentProof>
 export type GenericPaymentValidationRequest = MarketplaceDriverValidationRequest
 export type GenericPaymentValidationResult = MarketplaceDriverValidationResult & { driver: 'cashu' }
-export type GenericPaymentRecoveryItem = MarketplaceDriverRecoveryItem<
+export type GenericPaymentSweepInput = MarketplaceDriverPaymentSweepInput<
   GenericPaymentProof,
   MarketplaceDriverValidationExpected
 >
-export type GenericPaymentRecoveryState = Exclude<MarketplaceDriverRecoveryState<GenericPaymentProof>, { type: 'settlement_ready' }>
+export type GenericPaymentSweepState = MarketplaceDriverPaymentSweepState<GenericPaymentProof>
+export type GenericPaymentSettlementIntent = MarketplaceDriverPaymentSettlementIntent<
+  GenericPaymentProof,
+  MarketplaceDriverValidationExpected
+>
+export type GenericPaymentSettlementState = MarketplaceDriverPaymentSettlementState<GenericPaymentProof>
+export type GenericSwapResumeContext = MarketplaceDriverSwapResumeContext
+export type GenericSwapResumeState = MarketplaceDriverSwapResumeState
 export type GenericAuctionSettlementIntent = MarketplaceDriverAuctionSettlementIntent<
   GenericPaymentProof,
   MarketplaceDriverValidationExpected
@@ -135,8 +146,12 @@ export type CashuEscrowPolicy = MarketplaceDriverOrderPolicy<
   GenericPaymentIntent,
   GenericPaymentValidationRequest,
   GenericPaymentValidationResult,
-  GenericPaymentRecoveryItem,
-  GenericPaymentRecoveryState
+  GenericPaymentSweepInput,
+  GenericPaymentSweepState,
+  GenericPaymentSettlementIntent,
+  GenericPaymentSettlementState,
+  GenericSwapResumeContext,
+  GenericSwapResumeState
 > & {
   method: 'cashu'
   id: 'cashu:p2pk-escrow-v1'
@@ -158,7 +173,7 @@ export type CashuEscrowPolicy = MarketplaceDriverOrderPolicy<
     policy: 'cashu:p2pk-escrow-v1'
     data: Record<string, unknown>
   }>
-  recover(payment: GenericPaymentRecoveryItem): AsyncIterable<GenericPaymentRecoveryState>
+  sweepPayment(payment: GenericPaymentSweepInput): AsyncIterable<GenericPaymentSweepState>
   pay(intent: GenericPaymentIntent): AsyncIterable<GenericPolicyPaymentState>
   validatePayment(request: GenericPaymentValidationRequest): Promise<GenericPaymentValidationResult>
   state(): CashuEscrowPolicyState
@@ -171,8 +186,12 @@ export type CashuAuctionPolicy = MarketplaceDriverAuctionPolicy<
   GenericPaymentIntent,
   GenericPaymentValidationRequest,
   GenericPaymentValidationResult,
-  GenericPaymentRecoveryItem,
-  GenericPaymentRecoveryState,
+  GenericPaymentSweepInput,
+  GenericPaymentSweepState,
+  GenericPaymentSettlementIntent,
+  GenericPaymentSettlementState,
+  GenericSwapResumeContext,
+  GenericSwapResumeState,
   GenericAuctionSettlementIntent,
   GenericAuctionSettlementResult
 > & {
@@ -196,7 +215,7 @@ export type CashuAuctionPolicy = MarketplaceDriverAuctionPolicy<
     policy: 'cashu:p2pk-auction-v1'
     data: Record<string, unknown>
   }>
-  recover(payment: GenericPaymentRecoveryItem): AsyncIterable<GenericPaymentRecoveryState>
+  sweepPayment(payment: GenericPaymentSweepInput): AsyncIterable<GenericPaymentSweepState>
   pay(intent: GenericPaymentIntent): AsyncIterable<GenericPolicyPaymentState>
   validatePayment(request: GenericPaymentValidationRequest): Promise<GenericPaymentValidationResult>
   refundPayment(intent: GenericAuctionSettlementIntent & {

@@ -65,6 +65,26 @@ function createMockWallet() {
     defaultOutputType() {
       return { type: 'random' }
     },
+    getKeyset() {
+      return {
+        id: '009a1f293253e41e',
+        keys: {
+          1: 'key-1',
+          2: 'key-2',
+          5: 'key-5',
+          10: 'key-10',
+          20: 'key-20',
+          50: 'key-50',
+          100: 'key-100',
+          200: 'key-200',
+          500: 'key-500',
+          1000: 'key-1000',
+        },
+      }
+    },
+    getFeesForKeyset() {
+      return Amount.zero()
+    },
     getMintInfo() {
       return {
         isSupported(num) {

@@ -3,6 +3,7 @@ import {
   Wallet,
   type MintQuoteBolt11Response,
   type Proof,
+  type ProofLike,
 } from '@cashu/cashu-ts'
 import {
   MarketplacePolicyBase,
@@ -23,8 +24,13 @@ import type {
   CashuMintConfig,
   GenericPaymentIdentity,
   GenericPaymentIntent,
-  GenericPaymentRecoveryItem,
-  GenericPaymentRecoveryState,
+  GenericPaymentSweepInput,
+  GenericPaymentSweepState,
+  GenericPaymentProof,
+  GenericPaymentSettlementIntent,
+  GenericPaymentSettlementState,
+  GenericSwapResumeContext,
+  GenericSwapResumeState,
   GenericPaymentValidationRequest,
   GenericPaymentValidationResult,
   GenericAuctionSettlementIntent,
@@ -43,6 +49,7 @@ import {
   cashuEscrowP2pkOptions,
   cashuEscrowPolicyHash,
   cashuEscrowPolicyType,
+  cashuPaymentTerms,
   type CashuP2pkPolicyType,
   cashuPaymentProof,
   clearPaymentProofParams,
@@ -98,6 +105,7 @@ type CashuPolicySpec<
   Family extends 'escrow' | 'auction',
 > = {
   id: Id
+  label: string
   purpose: Purpose
   family: Family
   operationKind: 'cashu_escrow_mint' | 'cashu_auction_mint'
@@ -109,6 +117,7 @@ type CashuPolicySpec<
 
 const cashuEscrowSpec: CashuPolicySpec<typeof cashuEscrowPolicyType, 'order', 'escrow'> = {
   id: cashuEscrowPolicyType,
+  label: 'Cashu escrow',
   purpose: 'order',
   family: 'escrow',
   operationKind: 'cashu_escrow_mint',
@@ -120,6 +129,7 @@ const cashuEscrowSpec: CashuPolicySpec<typeof cashuEscrowPolicyType, 'order', 'e
 
 const cashuAuctionSpec: CashuPolicySpec<typeof cashuAuctionPolicyType, 'bid', 'auction'> = {
   id: cashuAuctionPolicyType,
+  label: 'Cashu auction',
   purpose: 'bid',
   family: 'auction',
   operationKind: 'cashu_auction_mint',
@@ -391,8 +401,6 @@ function resolveIntent(
   }
   const buyerKey = deriveCashuEscrowKey(intent.seed, {
     accountIndex: intent.accountIndex,
-    mintUrl: mint.mintUrl,
-    unit: mint.unit,
     role: 'buyer',
   })
   const participants: CashuEscrowParticipants = {
@@ -462,6 +470,7 @@ function targetOrderContext(value: unknown, fallbackListingAnchor?: unknown): Re
 async function prepareCashuAuctionRecycleSwap(input: {
   wallet: Wallet
   amount: bigint
+  feeReserve?: bigint
   proofs: Proof[]
   buyerPrivateKey: string
   target: CashuRecycleArgs['target']
@@ -475,11 +484,84 @@ async function prepareCashuAuctionRecycleSwap(input: {
       keep: input.wallet.defaultOutputType(),
     },
   )
+  const actualFee = cashuAmountToBigInt(preview.fees)
+  if (input.feeReserve !== undefined && actualFee !== input.feeReserve) {
+    throw new Error(`Cashu auction recycle fee reserve mismatch: expected ${input.feeReserve.toString()}, got ${actualFee.toString()}`)
+  }
   const outputs = [...(preview.keepOutputs ?? []), ...(preview.sendOutputs ?? [])]
   return serializeCashuSwapPreview({
     ...preview,
     inputs: input.wallet.signP2PKProofs(preview.inputs, input.buyerPrivateKey, outputs),
   })
+}
+
+function cashuAmountToBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') return value
+  if (typeof value === 'number') return BigInt(value)
+  if (typeof value === 'string') return BigInt(value)
+  if (value && typeof value === 'object' && typeof (value as { toBigInt?: unknown }).toBigInt === 'function') {
+    return (value as { toBigInt: () => bigint }).toBigInt()
+  }
+  return BigInt(String(value))
+}
+
+function keysetDenominations(wallet: Wallet): bigint[] {
+  return Object.keys(wallet.getKeyset().keys)
+    .map(value => BigInt(value))
+    .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0))
+}
+
+function syntheticProofsForKeyset(wallet: Wallet, amount: bigint): ProofLike[] {
+  let remaining = amount
+  const keysetId = wallet.keysetId
+  const proofs: ProofLike[] = []
+  for (const denomination of keysetDenominations(wallet)) {
+    if (denomination <= remaining) {
+      proofs.push({
+        id: keysetId,
+        amount: denomination.toString(),
+        secret: `synthetic:${keysetId}:${proofs.length}`,
+        C: '',
+      })
+      remaining -= denomination
+    }
+    if (remaining === 0n) break
+  }
+  if (remaining !== 0n) throw new Error(`Cashu keyset cannot split amount ${amount.toString()}`)
+  return proofs
+}
+
+async function cashuAuctionRecycleFunding(input: {
+  wallet: Wallet
+  amount: bigint
+  target: CashuRecycleArgs['target']
+}): Promise<{ fundingAmount: bigint; feeReserve: bigint }> {
+  const keyset = input.wallet.getKeyset()
+  const maxReserve = cashuAmountToBigInt(
+    input.wallet.getFeesForKeyset(Object.keys(keyset.keys).length, keyset.id),
+  ) + 1n
+  for (let feeReserve = 0n; feeReserve <= maxReserve; feeReserve += 1n) {
+    const proofs = syntheticProofsForKeyset(input.wallet, input.amount + feeReserve)
+    try {
+      const preview = await input.wallet.prepareSwapToSend(
+        input.amount,
+        proofs,
+        { includeFees: false },
+        {
+          send: { type: 'p2pk', options: input.target.p2pkOptions },
+          keep: input.wallet.defaultOutputType(),
+        },
+      )
+      const actualFee = cashuAmountToBigInt(preview.fees)
+      if (actualFee === feeReserve) {
+        return { fundingAmount: input.amount + feeReserve, feeReserve }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.toLowerCase().includes('not enough funds')) throw error
+    }
+  }
+  throw new Error(`Unable to calculate exact Cashu auction recycle fee reserve for amount ${input.amount.toString()}`)
 }
 
 type PaidQuoteWaitOptions = {
@@ -679,6 +761,54 @@ function cashuRecycleArgs(value: unknown): CashuRecycleArgs {
   }
 }
 
+function sortedJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(sortedJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${sortedJson((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function validateCashuPaymentTerms(
+  proof: GenericPaymentProof,
+  params: Record<string, unknown>,
+  policyType: CashuP2pkPolicyType,
+): string | undefined {
+  if (!proof.terms) return 'Cashu payment proof is missing public payment terms'
+  const data = mintedProofsData(params)
+  const denomination = typeof params.denomination === 'string' ? params.denomination : data.unit
+  const decimals = typeof params.decimals === 'number' ? params.decimals : 0
+  const recycleArgs = params.recycleArgs === undefined || params.recycleArgs === null
+    ? undefined
+    : cashuRecycleArgs(params.recycleArgs)
+  const expectedTerms = cashuPaymentTerms({
+    policyType,
+    mintUrl: data.mint,
+    unit: data.unit,
+    amount: {
+      value: data.amount,
+      denomination,
+      decimals,
+    },
+    paymentAmount: data.paymentAmount,
+    escrowFee: data.escrowFee,
+    denomination,
+    decimals,
+    tradeId: String(params.tradeId ?? ''),
+    settlementId: String(params.settlementId ?? ''),
+    participants: data.participants,
+    locktime: Number(params.locktime),
+    ...(recycleArgs ? { recycleArgs } : {}),
+  })
+  if (sortedJson(proof.terms) !== sortedJson(expectedTerms)) {
+    return 'Cashu payment public terms do not match proof evidence'
+  }
+  return undefined
+}
+
 function cashuProofAmountTemplate(params: Record<string, unknown>, value: bigint): CashuAmount {
   return {
     value,
@@ -707,8 +837,12 @@ function createCashuPolicy<
     GenericPaymentIntent,
     GenericPaymentValidationRequest,
     GenericPaymentValidationResult,
-    GenericPaymentRecoveryItem,
-    GenericPaymentRecoveryState,
+    GenericPaymentSweepInput,
+    GenericPaymentSweepState,
+    GenericPaymentSettlementIntent,
+    GenericPaymentSettlementState,
+    GenericSwapResumeContext,
+    GenericSwapResumeState,
     Purpose,
     Family
   > {
@@ -721,6 +855,7 @@ function createCashuPolicy<
       super({
         method: 'cashu',
         id: spec.id,
+        label: spec.label,
         purpose: spec.purpose,
         family: spec.family,
         initialState: {
@@ -803,9 +938,9 @@ function createCashuPolicy<
       }
     }
 
-    async *recover(payment: GenericPaymentRecoveryItem) {
+    async *sweepPayment(payment: GenericPaymentSweepInput) {
       if (payment.proof.driver !== 'cashu' && payment.proof.driver !== spec.id) {
-        yield this.noOpRecoveryState({ reason: `Cashu policy cannot recover ${payment.proof.driver}` })
+        yield this.noOpSweepState({ reason: `Cashu policy cannot sweep ${payment.proof.driver}` })
         return
       }
       try {
@@ -816,7 +951,7 @@ function createCashuPolicy<
         const proofs = proofsFromPaymentProof(payment.proof)
         const states = await proofStates(wallet, proofs)
         if (everyProofUnspent(states)) {
-          yield this.recoveredState({
+          yield this.sweptState(payment.proof, {
             mint: data.mint,
             unit: data.unit,
             amount: data.amount.toString(),
@@ -826,17 +961,17 @@ function createCashuPolicy<
           return
         }
         if (anyProofPending(states)) {
-          yield this.progressRecoveryState('Cashu proofs are pending at the mint', {
+          yield this.progressSweepState('Cashu proofs are pending at the mint', {
             mint: data.mint,
             unit: data.unit,
             states,
           })
           return
         }
-        yield this.noOpRecoveryState({ mint: data.mint, unit: data.unit, states })
+        yield this.noOpSweepState({ mint: data.mint, unit: data.unit, states })
       } catch (error) {
-        yield this.noOpRecoveryState({
-          reason: error instanceof Error ? error.message : 'Unable to recover Cashu payment',
+        yield this.noOpSweepState({
+          reason: error instanceof Error ? error.message : 'Unable to sweep Cashu payment',
         })
       }
     }
@@ -855,17 +990,29 @@ function createCashuPolicy<
       })
       const wallet = walletFactory(resolved.mint)
       await wallet.loadMint()
-      const limits = cashuMintLimits(wallet, resolved.mint, resolved.totalAmount)
+      const recycleFunding = resolved.recycleTarget
+        ? await cashuAuctionRecycleFunding({
+            wallet,
+            amount: resolved.totalAmount.value,
+            target: resolved.recycleTarget,
+          })
+        : undefined
+      const mintAmount = recycleFunding?.fundingAmount ?? resolved.totalAmount.value
+      const fundingAmount = { ...resolved.totalAmount, value: mintAmount }
+      const limits = cashuMintLimits(wallet, resolved.mint, fundingAmount)
       const createdAt = nowSeconds(options.now)
       const operationId = `${spec.operationPrefix}-${intent.settlementId}-${intent.accountIndex}`
       const description = `Marketplace Cashu ${spec.noun} ${intent.settlementId}`
-      const quote = await wallet.createMintQuoteBolt11(resolved.totalAmount.value, description)
+      const quote = await wallet.createMintQuoteBolt11(fundingAmount.value, description)
       logCashu(logger, 'info', 'Created Cashu mint quote requiring Lightning payment', {
         policyType: spec.id,
         mint: resolved.mint.mintUrl,
         quoteId: quote.quote,
         tradeIndex: intent.accountIndex,
         limits,
+        amount: resolved.totalAmount.value.toString(),
+        fundingAmount: fundingAmount.value.toString(),
+        feeReserve: recycleFunding?.feeReserve.toString(),
       })
       await options.storage.put({
         id: operationId,
@@ -897,9 +1044,9 @@ function createCashuPolicy<
           type: 'bolt11',
           bolt11: quote.request,
           amount: {
-            value: resolved.totalAmount.value.toString(),
-            denomination: resolved.totalAmount.denomination,
-            decimals: resolved.totalAmount.decimals,
+            value: fundingAmount.value.toString(),
+            denomination: fundingAmount.denomination,
+            decimals: fundingAmount.decimals,
           },
           description,
           ...(quote.expiry ? { expiresAt: quote.expiry } : {}),
@@ -922,6 +1069,9 @@ function createCashuPolicy<
           quoteId: quote.quote,
           tradeIndex: intent.accountIndex,
           limits,
+          amount: resolved.totalAmount.value.toString(),
+          fundingAmount: fundingAmount.value.toString(),
+          feeReserve: recycleFunding?.feeReserve.toString(),
         },
       }
 
@@ -960,7 +1110,7 @@ function createCashuPolicy<
       }
 
       const proofs = await wallet.ops
-        .mintBolt11(resolved.totalAmount.value, paidQuote)
+        .mintBolt11(fundingAmount.value, paidQuote)
         .asP2PK(resolved.target.p2pkOptions)
         .run()
       const recycleSwap = resolved.recycleTarget
@@ -970,6 +1120,7 @@ function createCashuPolicy<
             proofs,
             buyerPrivateKey: resolved.buyerKey.privateKey,
             target: resolved.recycleTarget,
+            ...(recycleFunding ? { feeReserve: recycleFunding.feeReserve } : {}),
           })
         : undefined
       const proof = cashuPaymentProof({
@@ -1039,6 +1190,8 @@ function createCashuPolicy<
         if (typeof params.policyType === 'string' && params.policyType !== spec.id) {
           return { driver: 'cashu', status: 'unverifiable', error: `Cashu ${spec.noun} policy cannot validate ${params.policyType}` }
         }
+        const termsError = validateCashuPaymentTerms(request.proof, params, spec.id)
+        if (termsError) return { driver: 'cashu', status: 'invalid', error: termsError }
         const data = mintedProofsData(params)
         const locktime = Number(params.locktime)
         const expectedAmount = data.amount
@@ -1189,8 +1342,6 @@ function createCashuPolicy<
       }
       const arbiterKey = deriveCashuEscrowKey(intent.seed, {
         accountIndex: 0,
-        mintUrl: sourceData.mint,
-        unit: sourceData.unit,
         role: 'settlement',
       })
       if (arbiterKey.publicKey.toLowerCase() !== sourceData.participants.arbiterPubkey.toLowerCase()) {

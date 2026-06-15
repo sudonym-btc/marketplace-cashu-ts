@@ -16,7 +16,14 @@ import {
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
-import { isMarketplaceDriverEncryptedPaymentProofParams } from '@sudonym-btc/marketplace-driver-interface'
+import {
+  isMarketplaceDriverEncryptedPaymentProofParams,
+  type MarketplaceDriverPaymentTerms,
+  type MarketplaceDriverPaymentTermAmount,
+  type MarketplaceDriverPaymentTermLock,
+  type MarketplaceDriverPaymentTermOutput,
+  type MarketplaceDriverPaymentTermPath,
+} from '@sudonym-btc/marketplace-driver-interface'
 
 import type { CashuAmount, GenericPaymentProof } from '../types.js'
 import { normalizePublicKey } from '../utils/hex.js'
@@ -77,6 +84,8 @@ export type CashuSerializedSwapPreview = {
   keepOutputs: SerializedOutputData[]
   unselectedProofs: string[]
 }
+
+const cashuSplitChunkCount = 10
 
 export function canonicalCashuAssetId(mintUrl: string, unit: string): string {
   return `cashu:${unit}:${mintUrl}`
@@ -283,6 +292,244 @@ export function deserializeCashuSwapPreview(preview: CashuSerializedSwapPreview)
   }
 }
 
+function termAmount(
+  value: bigint,
+  denomination: string,
+  decimals: number,
+  assetId: string,
+): MarketplaceDriverPaymentTermAmount {
+  return {
+    value: value.toString(),
+    denomination,
+    decimals,
+    assetId,
+  }
+}
+
+function termOutput(
+  role: string,
+  id: string,
+  amount: MarketplaceDriverPaymentTermAmount,
+): MarketplaceDriverPaymentTermOutput {
+  return { role, id, amount }
+}
+
+function splitAmount(total: bigint, chunk: number, chunks = cashuSplitChunkCount): [bigint, bigint] {
+  const seller = total * BigInt(chunk) / BigInt(chunks)
+  return [total - seller, seller]
+}
+
+function terminalOutputs(
+  participant: CashuEscrowParticipants,
+  paymentAmount: MarketplaceDriverPaymentTermAmount,
+  escrowFee: MarketplaceDriverPaymentTermAmount,
+  allocations: Array<{ role: 'buyer' | 'seller'; amount: MarketplaceDriverPaymentTermAmount }>,
+): MarketplaceDriverPaymentTermOutput[] {
+  return [
+    ...allocations.map(allocation => termOutput(
+      allocation.role,
+      allocation.role === 'buyer' ? participant.buyerPubkey : participant.sellerPubkey,
+      allocation.amount,
+    )),
+    ...(escrowFee.value !== '0' ? [termOutput('arbiter', participant.arbiterPubkey, escrowFee)] : []),
+  ]
+}
+
+function cashuEscrowTermPaths(input: {
+  participants: CashuEscrowParticipants
+  paymentAmount: MarketplaceDriverPaymentTermAmount
+  escrowFee: MarketplaceDriverPaymentTermAmount
+  locktime: number
+}): MarketplaceDriverPaymentTermPath[] {
+  const total = BigInt(input.paymentAmount.value)
+  return [
+    {
+      id: 'release',
+      requires: [
+        { role: 'seller', condition: 'signature' },
+        { role: 'arbiter', condition: 'signature' },
+      ],
+      result: {
+        type: 'terminal',
+        outputs: terminalOutputs(input.participants, input.paymentAmount, input.escrowFee, [
+          { role: 'seller', amount: input.paymentAmount },
+        ]),
+      },
+    },
+    {
+      id: 'refund',
+      requires: [
+        { role: 'buyer', condition: 'signature' },
+        { role: 'arbiter', condition: 'signature' },
+      ],
+      result: {
+        type: 'terminal',
+        outputs: terminalOutputs(input.participants, input.paymentAmount, input.escrowFee, [
+          { role: 'buyer', amount: input.paymentAmount },
+        ]),
+      },
+    },
+    ...Array.from({ length: cashuSplitChunkCount + 1 }, (_, chunk): MarketplaceDriverPaymentTermPath => {
+      const [buyer, seller] = splitAmount(total, chunk)
+      return {
+        id: `split-${chunk}-of-${cashuSplitChunkCount}`,
+        requires: [
+          { role: 'arbiter', condition: 'signature' },
+        ],
+        result: {
+          type: 'terminal',
+          outputs: terminalOutputs(input.participants, input.paymentAmount, input.escrowFee, [
+            { role: 'buyer', amount: { ...input.paymentAmount, value: buyer.toString() } },
+            { role: 'seller', amount: { ...input.paymentAmount, value: seller.toString() } },
+          ]),
+        },
+      }
+    }),
+    {
+      id: 'timeout',
+      after: input.locktime,
+      requires: [{ role: 'seller', condition: 'timeout' }],
+      result: {
+        type: 'terminal',
+        outputs: terminalOutputs(input.participants, input.paymentAmount, input.escrowFee, [
+          { role: 'seller', amount: input.paymentAmount },
+        ]),
+      },
+    },
+  ]
+}
+
+function cashuEscrowTermLock(input: {
+  policyType: CashuP2pkPolicyType
+  participants: CashuEscrowParticipants
+  fundedAmount: MarketplaceDriverPaymentTermAmount
+  paymentAmount: MarketplaceDriverPaymentTermAmount
+  escrowFee: MarketplaceDriverPaymentTermAmount
+  tradeId: string
+  settlementId: string
+  locktime: number
+  paths?: MarketplaceDriverPaymentTermPath[]
+}): MarketplaceDriverPaymentTermLock {
+  const isAuction = input.policyType === cashuAuctionPolicyType
+  return {
+    id: input.settlementId,
+    policyId: input.policyType,
+    kind: 'threshold',
+    amount: input.fundedAmount,
+    controls: isAuction
+      ? [
+          { role: 'buyer', id: input.participants.buyerPubkey },
+          { role: 'arbiter', id: input.participants.arbiterPubkey },
+        ]
+      : [
+          { role: 'buyer', id: input.participants.buyerPubkey },
+          { role: 'seller', id: input.participants.sellerPubkey },
+          { role: 'arbiter', id: input.participants.arbiterPubkey },
+        ],
+    threshold: 2,
+    conditions: {
+      tradeId: input.tradeId,
+      settlementId: input.settlementId,
+      locktime: input.locktime,
+      arbitration: isAuction
+        ? { type: 'promotable' }
+        : { type: 'chunked', chunks: cashuSplitChunkCount },
+    },
+    paths: input.paths ?? (isAuction
+      ? [
+          {
+            id: 'timeout',
+            after: input.locktime,
+            requires: [{ role: 'buyer', condition: 'timeout' }],
+            result: {
+              type: 'terminal',
+              outputs: [termOutput('buyer', input.participants.buyerPubkey, input.fundedAmount)],
+            },
+          },
+        ]
+      : cashuEscrowTermPaths({
+          participants: input.participants,
+          paymentAmount: input.paymentAmount,
+          escrowFee: input.escrowFee,
+          locktime: input.locktime,
+        })),
+  }
+}
+
+export function cashuPaymentTerms(input: {
+  policyType: CashuP2pkPolicyType
+  mintUrl: string
+  unit: string
+  amount: CashuAmount
+  paymentAmount: bigint
+  escrowFee: bigint
+  denomination: string
+  decimals: number
+  tradeId: string
+  settlementId: string
+  participants: CashuEscrowParticipants
+  locktime: number
+  recycleArgs?: CashuRecycleArgs
+}): MarketplaceDriverPaymentTerms {
+  const assetId = canonicalCashuAssetId(input.mintUrl, input.unit)
+  const paymentAmount = termAmount(input.paymentAmount, input.denomination, input.decimals, assetId)
+  const fundedAmount = termAmount(input.amount.value, input.denomination, input.decimals, assetId)
+  const escrowFee = termAmount(input.escrowFee, input.denomination, input.decimals, assetId)
+  const paths = input.policyType === cashuAuctionPolicyType && input.recycleArgs
+    ? [
+        {
+          id: 'promote',
+          requires: [
+            { role: 'buyer', condition: 'signature' },
+            { role: 'arbiter', condition: 'signature' },
+          ],
+          result: {
+            type: 'lock' as const,
+            lock: cashuEscrowTermLock({
+              policyType: cashuEscrowPolicyType,
+              participants: input.recycleArgs.target.participants,
+              fundedAmount,
+              paymentAmount,
+              escrowFee,
+              tradeId: input.recycleArgs.target.tradeId,
+              settlementId: input.recycleArgs.target.settlementId,
+              locktime: input.recycleArgs.target.locktime,
+            }),
+          },
+        },
+        {
+          id: 'timeout',
+          after: input.locktime,
+          requires: [{ role: 'buyer', condition: 'timeout' }],
+          result: {
+            type: 'terminal' as const,
+            outputs: [termOutput('buyer', input.participants.buyerPubkey, fundedAmount)],
+          },
+        },
+      ]
+    : undefined
+  return {
+    version: 1,
+    asset: paymentAmount,
+    parties: [
+      { role: 'buyer', id: input.participants.buyerPubkey },
+      { role: 'seller', id: input.participants.sellerPubkey },
+      { role: 'arbiter', id: input.participants.arbiterPubkey },
+    ],
+    lock: cashuEscrowTermLock({
+      policyType: input.policyType,
+      participants: input.participants,
+      fundedAmount,
+      paymentAmount,
+      escrowFee,
+      tradeId: input.tradeId,
+      settlementId: input.settlementId,
+      locktime: input.locktime,
+      ...(paths ? { paths } : {}),
+    }),
+  }
+}
+
 export function cashuPaymentProof(input: {
   policyType?: CashuP2pkPolicyType
   mintUrl: string
@@ -304,8 +551,24 @@ export function cashuPaymentProof(input: {
   if (paymentAmount < 0n) throw new Error('Cashu escrow fee exceeds funded amount')
   const publicDenomination = input.amount.denomination.toUpperCase() === 'SAT' ? 'BTC' : input.amount.denomination
   const publicDecimals = publicDenomination.toUpperCase() === 'BTC' ? 8 : input.amount.decimals
+  const terms = cashuPaymentTerms({
+    policyType,
+    mintUrl: input.mintUrl,
+    unit: input.unit,
+    amount: input.amount,
+    paymentAmount,
+    escrowFee: input.escrowFee.value,
+    denomination: publicDenomination,
+    decimals: publicDecimals,
+    tradeId: input.tradeId,
+    settlementId: input.settlementId,
+    participants: input.participants,
+    locktime: input.locktime,
+    ...(input.recycleArgs ? { recycleArgs: input.recycleArgs } : {}),
+  })
   return {
     driver: policyType,
+    terms,
     params: {
       version: 1,
       policyType,
