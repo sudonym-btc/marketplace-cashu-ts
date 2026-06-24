@@ -32,6 +32,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
+    "docs": "npm run docs:api",
+    "docs:api": "typedoc --plugin typedoc-plugin-markdown --tsconfig tsconfig.json --name \"Marketplace Cashu Driver\" --out docs/reference --readme none --githubPages false --hideBreadcrumbs true --hidePageHeader true src/index.ts",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
@@ -41,6 +43,8 @@
     "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
+    "typedoc": "0.28.19",
+    "typedoc-plugin-markdown": "4.12.0",
     "typescript": "^5.8.2"
   },
   "engines": {
