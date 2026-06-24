@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Marketplace Cashu Driver Docs</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css" />
+    <style>
+      :root { --theme-color: #2563eb; }
+      body { color: #172033; }
+      .sidebar { border-right: 1px solid #e5e7eb; }
+      .markdown-section { max-width: 960px; }
+      .markdown-section pre { border-radius: 8px; }
+      .app-name-link { font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <div id="app">Loading docs...</div>
+    <script>
+      window.$docsify = {
+        name: 'Marketplace Cashu Driver',
+        repo: 'sudonym-btc/marketplace-cashu-ts',
+        homepage: 'README.md',
+        loadSidebar: true,
+        subMaxLevel: 2,
+        auto2top: true,
+        relativePath: true,
+        search: {
+          paths: 'auto',
+          placeholder: 'Search',
+          noData: 'No results'
+        }
+      };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-typescript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+  </body>
+</html>
