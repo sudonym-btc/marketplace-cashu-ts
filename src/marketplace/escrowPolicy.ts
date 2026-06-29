@@ -8,6 +8,7 @@ import {
 import {
   MarketplacePolicyBase,
   resolveMarketplaceDriverPaymentProofParams,
+  type MarketplaceDriverConstructorOptions,
   type MarketplaceDriverLogger,
 } from '@sudonym-btc/marketplace-driver-interface'
 
@@ -65,15 +66,13 @@ import {
   type CashuRecycleArgs,
 } from './proof.js'
 
-export type CashuEscrowPolicyOptions = {
+export type CashuEscrowPolicyOptions = MarketplaceDriverConstructorOptions & {
   mints: CashuMintConfig[]
   storage: CashuEscrowStorage
-  appId?: string
   quotePollIntervalMs?: number
   quotePaymentTimeoutMs?: number
   walletFactory?: (mint: CashuMintConfig) => Wallet
   now?: () => number
-  logger?: MarketplaceDriverLogger
 }
 
 export type CashuAuctionPolicyOptions = CashuEscrowPolicyOptions
@@ -817,6 +816,75 @@ function cashuProofAmountTemplate(params: Record<string, unknown>, value: bigint
   }
 }
 
+function cashuPayoutInvoiceDescription(tradeId: string): string {
+  return `Marketplace Payout ${tradeId}`
+}
+
+function cashuAmountToSats(amount: bigint, data: ReturnType<typeof mintedProofsData>, params: Record<string, unknown>): number {
+  const unit = data.unit.trim().toLowerCase()
+  const denomination = typeof params.denomination === 'string' ? params.denomination.trim().toUpperCase() : ''
+  const decimals = typeof params.decimals === 'number' ? params.decimals : 0
+  let sats: bigint
+  if (unit === 'sat' || unit === 'sats') {
+    sats = amount
+  } else if (denomination === 'BTC' || denomination === 'TBTC' || denomination === 'XBT') {
+    sats = (amount * 100_000_000n) / (10n ** BigInt(decimals))
+  } else {
+    throw new Error(`Cannot sweep Cashu ${data.unit} proofs to a BTC invoice`)
+  }
+  if (sats > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Cashu payout amount exceeds Number.MAX_SAFE_INTEGER')
+  return Number(sats)
+}
+
+function cashuSweepAccountIndexes(payment: GenericPaymentSweepInput, maxScanIndex = 1_000): number[] {
+  const indexes = new Set<number>()
+  if (payment.accountIndex !== undefined) {
+    if (!Number.isSafeInteger(payment.accountIndex) || payment.accountIndex < 0) {
+      throw new Error(`Invalid Cashu sweep account index: ${payment.accountIndex}`)
+    }
+    indexes.add(payment.accountIndex)
+  }
+  for (let index = 0; index <= maxScanIndex; index += 1) indexes.add(index)
+  return [...indexes]
+}
+
+function cashuSweepBuyerKey(payment: GenericPaymentSweepInput, data: ReturnType<typeof mintedProofsData>): {
+  accountIndex: number
+  privateKey: string
+  publicKey: string
+} | undefined {
+  if (!payment.seed) return undefined
+  const expectedPubkey = data.participants.buyerPubkey
+  if (typeof expectedPubkey !== 'string' || expectedPubkey.length === 0) {
+    throw new Error('Cashu proof missing buyer pubkey')
+  }
+  for (const accountIndex of cashuSweepAccountIndexes(payment)) {
+    const key = deriveCashuEscrowKey(payment.seed, { accountIndex, role: 'buyer' })
+    if (key.publicKey.toLowerCase() === expectedPubkey.toLowerCase()) {
+      return { accountIndex, ...key }
+    }
+  }
+  return undefined
+}
+
+function meltQuoteFeeReserve(quote: { fee_reserve?: unknown }): bigint {
+  const reserve = quote.fee_reserve
+  if (reserve === undefined || reserve === null) return 0n
+  if (typeof reserve === 'bigint') return reserve
+  if (typeof reserve === 'number') {
+    if (!Number.isSafeInteger(reserve) || reserve < 0) throw new Error(`Invalid Cashu melt fee reserve: ${reserve}`)
+    return BigInt(reserve)
+  }
+  if (typeof reserve === 'string') return BigInt(reserve)
+  if (typeof reserve === 'object') {
+    if (typeof (reserve as { toBigInt?: unknown }).toBigInt === 'function') {
+      return (reserve as { toBigInt: () => bigint }).toBigInt()
+    }
+    if ('amount' in reserve) return cashuAmountToBigInt(reserve.amount)
+  }
+  throw new Error('Invalid Cashu melt fee reserve')
+}
+
 function createCashuPolicy<
   Id extends CashuP2pkPolicyType,
   Purpose extends CashuPolicyPurpose,
@@ -949,13 +1017,61 @@ function createCashuPolicy<
         const wallet = walletFactory({ mintUrl: data.mint, unit: data.unit, denomination: '', decimals: 0 })
         await wallet.loadMint()
         const proofs = proofsFromPaymentProof(payment.proof)
+        const buyerKey = cashuSweepBuyerKey(payment, data)
+        if (!buyerKey) {
+          yield this.noOpSweepState({
+            reason: 'Cashu sweep requires the local buyer Cashu key',
+            mint: data.mint,
+            unit: data.unit,
+            expectedBuyerPubkey: data.participants.buyerPubkey,
+          })
+          return
+        }
         const states = await proofStates(wallet, proofs)
         if (everyProofUnspent(states)) {
+          if (!options.withdrawals) {
+            yield this.noOpSweepState({
+              reason: 'Cashu payout invoice provider is not configured',
+              mint: data.mint,
+              unit: data.unit,
+              proofCount: proofs.length,
+            })
+            return
+          }
+          const tradeId = typeof params.tradeId === 'string' ? params.tradeId : payment.tradeId
+          const proofTotal = proofAmount(proofs)
+          const description = cashuPayoutInvoiceDescription(tradeId)
+          let amountSats = cashuAmountToSats(proofTotal, data, params)
+          let bolt11 = await options.withdrawals.createInvoice(amountSats, description)
+          let quote = await wallet.createMeltQuoteBolt11(bolt11)
+          let feeReserve = meltQuoteFeeReserve(quote)
+          if (feeReserve > 0n) {
+            const netAmount = proofTotal - feeReserve
+            if (netAmount <= 0n) throw new Error('Cashu melt fee reserve exceeds proof amount')
+            amountSats = cashuAmountToSats(netAmount, data, params)
+            bolt11 = await options.withdrawals.createInvoice(amountSats, description)
+            quote = await wallet.createMeltQuoteBolt11(bolt11)
+            feeReserve = meltQuoteFeeReserve(quote)
+          }
+          yield this.progressSweepState('Created Cashu payout invoice', {
+            mint: data.mint,
+            unit: data.unit,
+            amountSats,
+            accountIndex: buyerKey.accountIndex,
+            quoteId: quote.quote,
+            feeReserve: feeReserve.toString(),
+          })
+          const melt = await wallet.meltProofsBolt11(quote, proofs, { privkey: buyerKey.privateKey })
           yield this.sweptState(payment.proof, {
             mint: data.mint,
             unit: data.unit,
-            amount: data.amount.toString(),
+            amount: proofTotal.toString(),
+            amountSats,
+            accountIndex: buyerKey.accountIndex,
             proofCount: proofs.length,
+            quoteId: quote.quote,
+            feeReserve: feeReserve.toString(),
+            changeProofCount: melt.change?.length ?? 0,
             states,
           })
           return

@@ -50,6 +50,12 @@ function createMockWallet() {
     onceMintPaid: [],
     p2pkOptions: [],
     recycleP2pkOptions: [],
+    meltInvoices: [],
+    meltedQuotes: [],
+    meltedProofCounts: [],
+    meltPrivkeys: [],
+    signedProofCounts: [],
+    signedPrivateKeys: [],
   }
   const mockOutput = (amount, p2pkOptions) => ({
     blindedMessage: {
@@ -123,6 +129,26 @@ function createMockWallet() {
         expiry: 1_800_000_000,
       }
     },
+    async createMeltQuoteBolt11(invoice) {
+      calls.meltInvoices.push(invoice)
+      return {
+        quote: `melt-${calls.meltInvoices.length}`,
+        request: invoice,
+        amount: 10,
+        fee_reserve: Amount.zero(),
+        state: 'UNPAID',
+        expiry: 1_800_000_000,
+      }
+    },
+    async meltProofsBolt11(quote, proofs, config) {
+      calls.meltedQuotes.push(quote.quote)
+      calls.meltedProofCounts.push(proofs.length)
+      calls.meltPrivkeys.push(config?.privkey)
+      return {
+        quote,
+        change: [],
+      }
+    },
     ops: {
       mintBolt11(amount, quote) {
         return {
@@ -154,7 +180,9 @@ function createMockWallet() {
         unselectedProofs: [],
       }
     },
-    signP2PKProofs(proofs) {
+    signP2PKProofs(proofs, privateKey) {
+      calls.signedProofCounts.push(proofs.length)
+      calls.signedPrivateKeys.push(privateKey)
       return proofs.map((proof, index) => index === 0
         ? { ...proof, witness: { signatures: ['buyer-signature'] } }
         : proof)
@@ -380,6 +408,65 @@ test('creates an escrow payment proof and validates unspent locked proofs', asyn
   const operation = await store.get('cashu-escrow-order-group-1-9')
   assert.equal(operation?.status, 'completed')
   assert.equal(operation?.proofs?.length, 1)
+})
+
+test('sweeps unspent Cashu proofs to a withdrawal invoice', async () => {
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  const withdrawalInvoices = []
+  const seed = '2'.repeat(64)
+  const accountIndex = 9
+  const policy = createCashuEscrowPolicy({
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    quotePollIntervalMs: 0,
+    quotePaymentTimeoutMs: 1_000,
+    withdrawals: {
+      createInvoice(amount, description) {
+        withdrawalInvoices.push({ amount, description })
+        return `lnbcrt1withdraw${amount}`
+      },
+    },
+    now: () => 1_777_000_000_000,
+  })
+  const payStates = []
+  for await (const state of policy.pay(createEscrowIntent(policy, {
+    tradeId: 'trade-sweep',
+    settlementId: 'order-sweep',
+    seed,
+    accountIndex,
+    amount: { value: '10', denomination: 'SAT', decimals: 0 },
+    fee: { value: '0', denomination: 'SAT', decimals: 0 },
+  }))) payStates.push(state)
+
+  const sweepStates = []
+  for await (const state of policy.sweepPayment({
+    paymentId: 'payment-sweep',
+    tradeId: 'trade-sweep',
+    orderGroupId: 'order-sweep',
+    listingAnchor: 'listing-sweep',
+    createdAt: 1_777_000_010,
+    seed,
+    proof: payStates[3].proof,
+  })) sweepStates.push(state)
+
+  const buyer = deriveCashuEscrowKey(seed, {
+    accountIndex,
+    role: 'buyer',
+  })
+  assert.deepEqual(withdrawalInvoices, [{
+    amount: 10,
+    description: 'Marketplace Payout trade-sweep',
+  }])
+  assert.deepEqual(calls.meltPrivkeys, [buyer.privateKey])
+  assert.deepEqual(calls.meltInvoices, ['lnbcrt1withdraw10'])
+  assert.deepEqual(calls.meltedQuotes, ['melt-1'])
+  assert.deepEqual(calls.meltedProofCounts, [1])
+  assert.equal(sweepStates[0].type, 'progress')
+  assert.equal(sweepStates.at(-1).type, 'swept')
+  assert.equal(sweepStates.at(-1).data.amountSats, 10)
+  assert.equal(sweepStates.at(-1).data.accountIndex, accountIndex)
 })
 
 test('waits for Cashu mint quote payment over websocket before slow polling', async () => {
