@@ -1194,7 +1194,12 @@ function createCashuPolicy<
       yield {
         type: 'payment_progress',
         status: 'Waiting for Cashu mint quote payment',
-        data: { method: 'cashu', mint: resolved.mint.mintUrl, quoteId: quote.quote },
+        data: {
+          method: 'cashu',
+          stage: 'awaiting_external_payment',
+          mint: resolved.mint.mintUrl,
+          quoteId: quote.quote,
+        },
       }
       logCashu(logger, 'info', 'Waiting for Cashu mint quote payment', {
         policyType: spec.id,
@@ -1221,8 +1226,13 @@ function createCashuPolicy<
       })
       yield {
         type: 'payment_progress',
-        status: 'Mint quote paid; minting escrow proofs',
-        data: { method: 'cashu', mint: resolved.mint.mintUrl, quoteId: paidQuote.quote },
+        status: 'Lightning payment detected; minting escrow proofs',
+        data: {
+          method: 'cashu',
+          stage: 'external_payment_detected',
+          mint: resolved.mint.mintUrl,
+          quoteId: paidQuote.quote,
+        },
       }
 
       const proofs = await wallet.ops
