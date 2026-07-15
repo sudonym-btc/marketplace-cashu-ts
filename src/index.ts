@@ -39,6 +39,7 @@ export type {
   GenericSwapResumeState,
 } from './types.js'
 export type {
+  CashuEscrowOperationData,
   CashuEscrowOperation,
   CashuEscrowOperationQuery,
   CashuEscrowOperationStatus,

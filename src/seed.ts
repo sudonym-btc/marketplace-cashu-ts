@@ -5,9 +5,12 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { normalizeHex } from './utils/hex.js'
 
 const curveOrder = secp256k1.Point.Fn.ORDER
+export const maxCashuDerivationIndex = 0xffff_ffff
 
 function uint32Bytes(value: number): Uint8Array {
-  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid index: ${value}`)
+  if (!Number.isSafeInteger(value) || value < 0 || value > maxCashuDerivationIndex) {
+    throw new Error(`Invalid uint32 index: ${value}`)
+  }
   return new Uint8Array([
     (value >>> 24) & 0xff,
     (value >>> 16) & 0xff,

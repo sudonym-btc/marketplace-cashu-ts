@@ -1,10 +1,19 @@
 import {
+  Amount,
+  CheckStateEnum,
   MintQuoteState,
+  OutputData,
   Wallet,
+  blindMessage,
   type MintQuoteBolt11Response,
+  type MintPreview,
+  type OutputDataFactory,
   type Proof,
   type ProofLike,
 } from '@cashu/cashu-ts'
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import {
   MarketplacePolicyBase,
   resolveMarketplaceDriverPaymentProofParams,
@@ -12,8 +21,8 @@ import {
   type MarketplaceDriverLogger,
 } from '@sudonym-btc/marketplace-driver-interface'
 
-import { deriveCashuEscrowKey } from '../seed.js'
-import type { CashuEscrowStorage } from '../storage.js'
+import { deriveCashuEscrowKey, maxCashuDerivationIndex } from '../seed.js'
+import type { CashuEscrowOperation, CashuEscrowStorage } from '../storage.js'
 import type {
   CashuAmount,
   CashuAuctionPaymentPolicy,
@@ -679,6 +688,8 @@ function mintedProofsData(params: Record<string, unknown>) {
   const unit = params.unit
   const amount = params.amount
   const paymentAmount = params.paymentAmount
+  const settlementAmount = params.settlementAmount
+  const fundingFee = params.fundingFee
   const escrowFee = params.escrowFee
   const participants = params.participants
   if (typeof mint !== 'string') throw new Error('Cashu proof missing mint')
@@ -687,12 +698,28 @@ function mintedProofsData(params: Record<string, unknown>) {
   if (!participants || typeof participants !== 'object') throw new Error('Cashu proof missing participants')
   const fundedAmount = BigInt(amount)
   const fee = typeof escrowFee === 'string' ? BigInt(escrowFee) : 0n
+  const providerFee = typeof fundingFee === 'string' ? BigInt(fundingFee) : 0n
+  const settledAmount = typeof settlementAmount === 'string'
+    ? BigInt(settlementAmount)
+    : fundedAmount - providerFee
+  const paidAmount = typeof paymentAmount === 'string' ? BigInt(paymentAmount) : settledAmount - fee
+  if (fundedAmount < 0n || settledAmount < 0n || paidAmount < 0n || fee < 0n || providerFee < 0n) {
+    throw new Error('Cashu proof contains a negative amount')
+  }
+  if (fundedAmount !== settledAmount + providerFee) {
+    throw new Error('Cashu funded amount does not equal settlement amount plus funding fee')
+  }
+  if (settledAmount !== paidAmount + fee) {
+    throw new Error('Cashu settlement amount does not equal payment amount plus escrow fee')
+  }
   return {
     mint,
     unit,
     amount: fundedAmount,
-    paymentAmount: typeof paymentAmount === 'string' ? BigInt(paymentAmount) : fundedAmount - fee,
+    settlementAmount: settledAmount,
+    paymentAmount: paidAmount,
     escrowFee: fee,
+    fundingFee: providerFee,
     participants: participants as CashuEscrowParticipants,
   }
 }
@@ -726,8 +753,17 @@ function cashuRecycleArgs(value: unknown): CashuRecycleArgs {
   if (args.version !== 1 || args.type !== 'cashu:p2pk-auction-promote-v1') {
     throw new Error('Invalid Cashu auction recycleArgs type')
   }
+  if (args.fromPolicyType !== cashuAuctionPolicyType || args.toPolicyType !== cashuEscrowPolicyType) {
+    throw new Error('Invalid Cashu auction recycleArgs policy transition')
+  }
   const source = recordValue(args.source, 'recycleArgs.source')
+  if (source.policyType !== cashuAuctionPolicyType) {
+    throw new Error('Invalid Cashu auction recycleArgs source policy')
+  }
   const target = recordValue(args.target, 'recycleArgs.target')
+  if (target.policyType !== cashuEscrowPolicyType) {
+    throw new Error('Invalid Cashu auction recycleArgs target policy')
+  }
   const swap = args.swap === undefined || args.swap === null
     ? undefined
     : recordValue(args.swap, 'recycleArgs.swap') as CashuRecycleArgs['swap']
@@ -760,6 +796,48 @@ function cashuRecycleArgs(value: unknown): CashuRecycleArgs {
   }
 }
 
+function verifyCashuRecycleAuthorization(args: CashuRecycleArgs, buyerPubkey: string): void {
+  const normalizedBuyer = buyerPubkey.toLowerCase()
+  if (args.signerPubkey.toLowerCase() !== normalizedBuyer) {
+    throw new Error('Cashu recycle authorization signer is not the bid buyer')
+  }
+  const canonicalMessage = JSON.stringify({
+    version: 1,
+    type: 'cashu:p2pk-auction-promote-v1',
+    fromPolicyType: cashuAuctionPolicyType,
+    toPolicyType: cashuEscrowPolicyType,
+    source: args.source,
+    target: args.target,
+    ...(args.swap ? { swap: args.swap } : {}),
+  })
+  if (args.message !== canonicalMessage) {
+    throw new Error('Cashu recycle authorization message is not canonical')
+  }
+  const digest = sha256(new TextEncoder().encode(canonicalMessage))
+  if (args.messageHash.toLowerCase() !== `0x${bytesToHex(digest)}`) {
+    throw new Error('Cashu recycle authorization message hash mismatch')
+  }
+  const pubkey = hexToBytes(args.signerPubkey)
+  const xOnlyPubkey = pubkey.length === 33 ? pubkey.slice(1) : pubkey
+  if (!schnorr.verify(hexToBytes(args.signature), digest, xOnlyPubkey)) {
+    throw new Error('Invalid Cashu recycle authorization signature')
+  }
+}
+
+function cashuProofIdentity(proof: ProofLike): string {
+  return sortedJson({
+    id: proof.id,
+    amount: cashuAmountToBigInt(proof.amount).toString(),
+    secret: proof.secret,
+    C: proof.C,
+  })
+}
+
+function sameCashuProofSet(left: ProofLike[], right: ProofLike[]): boolean {
+  return left.length === right.length &&
+    left.map(cashuProofIdentity).sort().join('\n') === right.map(cashuProofIdentity).sort().join('\n')
+}
+
 function sortedJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(sortedJson).join(',')}]`
   if (value && typeof value === 'object') {
@@ -769,6 +847,106 @@ function sortedJson(value: unknown): string {
       .join(',')}}`
   }
   return JSON.stringify(value)
+}
+
+function sha256Hex(value: string): string {
+  return bytesToHex(sha256(new TextEncoder().encode(value)))
+}
+
+function cashuRequestFingerprint(input: {
+  policyType: CashuP2pkPolicyType
+  intent: GenericPaymentIntent
+  resolved: ReturnType<typeof resolveIntent>
+  fundingAmount: CashuAmount
+  recycleFeeReserve?: bigint
+}): string {
+  return sha256Hex(sortedJson({
+    version: 1,
+    policyType: input.policyType,
+    purpose: input.intent.purpose,
+    tradeId: input.intent.tradeId,
+    settlementId: input.intent.settlementId,
+    accountIndex: input.intent.accountIndex,
+    mintUrl: input.resolved.mint.mintUrl,
+    unit: input.resolved.mint.unit,
+    fundingAmount: input.fundingAmount.value.toString(),
+    paymentAmount: input.resolved.paymentAmount.value.toString(),
+    escrowFee: input.resolved.escrowFee.value.toString(),
+    denomination: input.fundingAmount.denomination,
+    decimals: input.fundingAmount.decimals,
+    policyHash: input.resolved.policyHash,
+    conditionHash: input.resolved.conditionHash,
+    locktime: input.resolved.locktime,
+    participants: input.resolved.participants,
+    targetOrder: input.resolved.targetOrder,
+    recycleTarget: input.resolved.recycleTarget,
+    ...(input.recycleFeeReserve === undefined
+      ? {}
+      : { recycleFeeReserve: input.recycleFeeReserve.toString() }),
+  }))
+}
+
+function deterministicCashuP2pkFactory(input: {
+  seed: string
+  requestFingerprint: string
+  p2pkOptions: ReturnType<typeof cashuEscrowP2pkOptions>
+}): OutputDataFactory {
+  let outputIndex = 0
+  return (value, keyset) => {
+    const index = outputIndex
+    outputIndex += 1
+    const amountValue = Amount.from(value)
+    // Let cashu-ts construct the canonical NUT-11 secret, then replace only
+    // its random nonce and blinding factor with domain-separated derivations.
+    // This makes the mint request replayable from the marketplace seed without
+    // persisting bearer proofs or prepared output secrets.
+    const template = OutputData.createSingleP2PKData(input.p2pkOptions, amountValue, keyset.id)
+    const parsed = JSON.parse(new TextDecoder().decode(template.secret)) as [string, {
+      nonce: string
+      data: string
+      tags?: string[][]
+    }]
+    const context = [
+      'marketplace-cashu-mint-output-v1',
+      input.seed.toLowerCase(),
+      input.requestFingerprint,
+      keyset.id,
+      index.toString(),
+      amountValue.toString(),
+    ].join(':')
+    parsed[1].nonce = sha256Hex(`${context}:nonce`)
+    const secret = new TextEncoder().encode(JSON.stringify(parsed))
+    const scalarDigest = sha256Hex(`${context}:blinding`)
+    const blindingFactor = (BigInt(`0x${scalarDigest}`) % (secp256k1.Point.Fn.ORDER - 1n)) + 1n
+    const blinded = blindMessage(secret, blindingFactor)
+    return new OutputData({
+      amount: amountValue,
+      B_: blinded.B_.toHex(true),
+      id: keyset.id,
+    }, blinded.r, secret)
+  }
+}
+
+async function restoreCashuOutputs(
+  wallet: Wallet,
+  outputs: MintPreview['outputData'],
+  keysetId: string,
+): Promise<Proof[]> {
+  const restored = await wallet.mint.restore({ outputs: outputs.map(output => output.blindedMessage) })
+  const signatures = new Map(restored.outputs.map((output, index) => [output.B_, restored.signatures[index]]))
+  const keyset = wallet.getKeyset(keysetId)
+  return outputs.map(output => {
+    const signature = signatures.get(output.blindedMessage.B_)
+    if (!signature) throw new Error('Cashu mint restore did not return every prepared output')
+    const concrete = output instanceof OutputData
+      ? output
+      : OutputData.deserialize(OutputData.serialize(output))
+    return concrete.toProof(signature, keyset)
+  })
+}
+
+async function restorePreparedMint(wallet: Wallet, preview: MintPreview): Promise<Proof[]> {
+  return restoreCashuOutputs(wallet, preview.outputData, preview.keysetId)
 }
 
 function validateCashuPaymentTerms(
@@ -793,6 +971,7 @@ function validateCashuPaymentTerms(
       decimals,
     },
     paymentAmount: data.paymentAmount,
+    settlementAmount: data.settlementAmount,
     escrowFee: data.escrowFee,
     denomination,
     decimals,
@@ -837,9 +1016,12 @@ function cashuAmountToSats(amount: bigint, data: ReturnType<typeof mintedProofsD
 }
 
 function cashuSweepAccountIndexes(payment: GenericPaymentSweepInput, maxScanIndex = 1_000): number[] {
+  if (!Number.isSafeInteger(maxScanIndex) || maxScanIndex < 0 || maxScanIndex > maxCashuDerivationIndex) {
+    throw new Error(`Invalid Cashu sweep max index: ${maxScanIndex}`)
+  }
   const indexes = new Set<number>()
   if (payment.accountIndex !== undefined) {
-    if (!Number.isSafeInteger(payment.accountIndex) || payment.accountIndex < 0) {
+    if (!Number.isSafeInteger(payment.accountIndex) || payment.accountIndex < 0 || payment.accountIndex > maxCashuDerivationIndex) {
       throw new Error(`Invalid Cashu sweep account index: ${payment.accountIndex}`)
     }
     indexes.add(payment.accountIndex)
@@ -924,6 +1106,7 @@ function createCashuPolicy<
         method: 'cashu',
         id: spec.id,
         label: spec.label,
+        proofSensitivity: 'confidential',
         purpose: spec.purpose,
         family: spec.family,
         initialState: {
@@ -967,6 +1150,9 @@ function createCashuPolicy<
     }
 
     async discoverHighWatermark(context: CashuPolicyWatermarkContext) {
+      if (context.highWaterMark < 0 || context.highWaterMark >= maxCashuDerivationIndex) {
+        throw new Error(`Cashu high-water mark must leave a valid uint32 index: ${context.highWaterMark}`)
+      }
       return {
         policy: spec.id,
         maxUsedIndex: context.highWaterMark,
@@ -981,13 +1167,74 @@ function createCashuPolicy<
 
     async startup(context: CashuPolicyStartupContext) {
       const activeOperations = await options.storage.list({
-        status: ['quote_created', 'payment_required', 'minting'],
+        status: ['quote_created', 'payment_required', 'minting', 'paid'],
       })
+      const recoveryActions: Array<Record<string, unknown>> = []
+      for (const operation of activeOperations) {
+        if (!operation.quoteId || !operation.request || !operation.data?.requestFingerprint) {
+          await options.storage.put({
+            ...operation,
+            status: 'reconciliation_required',
+            error: 'Quote creation was interrupted before a recoverable quote was recorded',
+            updatedAt: nowSeconds(options.now),
+          })
+          recoveryActions.push({
+            operationId: operation.id,
+            status: 'reconciliation_required',
+          })
+          continue
+        }
+        const mint = options.mints.find(candidate =>
+          candidate.mintUrl === operation.mintUrl && candidate.unit === operation.unit)
+        if (!mint) {
+          recoveryActions.push({
+            operationId: operation.id,
+            status: 'configuration_required',
+            mintUrl: operation.mintUrl,
+            unit: operation.unit,
+          })
+          continue
+        }
+        try {
+          const wallet = walletFactory(mint)
+          await wallet.loadMint()
+          const quote = await wallet.checkMintQuoteBolt11(operation.quoteId)
+          const status = quote.state === MintQuoteState.UNPAID
+            ? 'payment_required' as const
+            : quote.state === MintQuoteState.PAID
+              ? 'paid' as const
+              : 'minting' as const
+          const { error: _previousError, ...recoverableOperation } = operation
+          await options.storage.put({
+            ...recoverableOperation,
+            status,
+            request: quote.request || operation.request,
+            data: {
+              ...operation.data,
+              quoteExpiry: quote.expiry,
+            },
+            updatedAt: nowSeconds(options.now),
+          })
+          recoveryActions.push({
+            operationId: operation.id,
+            quoteId: operation.quoteId,
+            quoteState: quote.state,
+            status,
+          })
+        } catch (error) {
+          recoveryActions.push({
+            operationId: operation.id,
+            quoteId: operation.quoteId,
+            status: 'retry_required',
+            error: error instanceof Error ? error.message : 'Unable to check Cashu quote',
+          })
+        }
+      }
       this.setState({
         enabled: options.mints.length > 0,
         started: true,
         mintCount: options.mints.length,
-        startSummary: `${activeOperations.length} active Cashu ${spec.noun} operation(s) available for recovery`,
+        startSummary: `${recoveryActions.length} Cashu ${spec.noun} recovery action(s) checked`,
       })
       this.log('info', 'Cashu policy startup complete', {
         policyType: spec.id,
@@ -1000,6 +1247,7 @@ function createCashuPolicy<
         data: {
           mintCount: options.mints.length,
           activeOperations: activeOperations.length,
+          recoveryActions,
           highWaterMark: context.highWaterMark,
           nextUnusedIndex: context.nextUnusedIndex,
         },
@@ -1119,29 +1367,26 @@ function createCashuPolicy<
       const createdAt = nowSeconds(options.now)
       const operationId = `${spec.operationPrefix}-${intent.settlementId}-${intent.accountIndex}`
       const description = `Marketplace Cashu ${spec.noun} ${intent.settlementId}`
-      const quote = await wallet.createMintQuoteBolt11(fundingAmount.value, description)
-      logCashu(logger, 'info', 'Created Cashu mint quote requiring Lightning payment', {
+      const requestFingerprint = cashuRequestFingerprint({
         policyType: spec.id,
-        mint: resolved.mint.mintUrl,
-        quoteId: quote.quote,
-        tradeIndex: intent.accountIndex,
-        limits,
-        amount: resolved.totalAmount.value.toString(),
-        fundingAmount: fundingAmount.value.toString(),
-        feeReserve: recycleFunding?.feeReserve.toString(),
+        intent,
+        resolved,
+        fundingAmount,
+        ...(recycleFunding ? { recycleFeeReserve: recycleFunding.feeReserve } : {}),
       })
-      await options.storage.put({
+      const initialOperation: CashuEscrowOperation = {
         id: operationId,
         kind: spec.operationKind,
-        status: 'payment_required',
+        status: 'quote_created',
         tradeId: intent.tradeId,
         settlementId: intent.settlementId,
         accountIndex: intent.accountIndex,
         mintUrl: resolved.mint.mintUrl,
         unit: resolved.mint.unit,
-        quoteId: quote.quote,
-        request: quote.request,
         data: {
+          version: 1,
+          requestFingerprint,
+          outputDerivationVersion: 1,
           policyType: spec.id,
           policyHash: resolved.policyHash,
           conditionHash: resolved.conditionHash,
@@ -1149,10 +1394,101 @@ function createCashuPolicy<
           sellerCashuPubkey: resolved.participants.sellerPubkey,
           arbiterCashuPubkey: resolved.participants.arbiterPubkey,
           locktime: resolved.locktime,
+          fundingAmount: fundingAmount.value.toString(),
+          paymentAmount: resolved.paymentAmount.value.toString(),
+          escrowFee: resolved.escrowFee.value.toString(),
+          denomination: fundingAmount.denomination,
+          decimals: fundingAmount.decimals,
+          description,
+          ...(recycleFunding ? { recycleFeeReserve: recycleFunding.feeReserve.toString() } : {}),
         },
         createdAt,
         updatedAt: createdAt,
-      })
+      }
+      let operation = await options.storage.get(operationId)
+      if (!operation) {
+        if (options.storage.create) {
+          const created = await options.storage.create(initialOperation)
+          operation = created ? initialOperation : await options.storage.get(operationId)
+        } else {
+          // Custom durable stores should implement create() for cross-process
+          // exclusion. The fallback remains safe for a single policy instance.
+          await options.storage.put(initialOperation)
+          operation = initialOperation
+        }
+      }
+      if (!operation) throw new Error(`Unable to reserve Cashu operation ${operationId}`)
+      if (operation.data.requestFingerprint !== requestFingerprint) {
+        throw new Error(`Cashu operation id collision for ${operationId}`)
+      }
+      if (operation.status === 'completed') {
+        throw new Error(`Cashu operation ${operationId} is already completed; reuse its published payment proof`)
+      }
+      if (operation.status === 'failed' || operation.status === 'reconciliation_required') {
+        throw new Error(operation.error ?? `Cashu operation ${operationId} requires manual reconciliation`)
+      }
+
+      let quote: MintQuoteBolt11Response
+      if (operation.quoteId && operation.request) {
+        // Re-read the authoritative mint state before resuming. In particular,
+        // PAID means it is safe to submit the deterministic outputs, whereas
+        // ISSUED means those exact outputs must be restored instead.
+        quote = await wallet.checkMintQuoteBolt11(operation.quoteId)
+        if (quote.quote !== operation.quoteId) throw new Error('Cashu mint returned a mismatched quote id')
+        if (!quote.request) quote = { ...quote, request: operation.request }
+        operation = {
+          ...operation,
+          request: quote.request,
+          data: {
+            ...operation.data,
+            quoteExpiry: quote.expiry,
+          },
+          updatedAt: nowSeconds(options.now),
+        }
+        await options.storage.put(operation)
+        logCashu(logger, 'info', 'Resuming existing Cashu mint quote', {
+          policyType: spec.id,
+          mint: resolved.mint.mintUrl,
+          quoteId: quote.quote,
+          operationId,
+        })
+      } else if (operation.status === 'quote_created') {
+        try {
+          quote = await wallet.createMintQuoteBolt11(fundingAmount.value, description)
+        } catch (error) {
+          await options.storage.put({
+            ...operation,
+            status: 'reconciliation_required',
+            error: 'Mint quote creation did not complete; refusing to create a replacement quote automatically',
+            updatedAt: nowSeconds(options.now),
+          })
+          throw error
+        }
+        operation = {
+          ...operation,
+          status: 'payment_required',
+          quoteId: quote.quote,
+          request: quote.request,
+          data: {
+            ...operation.data,
+            quoteExpiry: quote.expiry,
+          },
+          updatedAt: nowSeconds(options.now),
+        }
+        await options.storage.put(operation)
+        logCashu(logger, 'info', 'Created Cashu mint quote requiring Lightning payment', {
+          policyType: spec.id,
+          mint: resolved.mint.mintUrl,
+          quoteId: quote.quote,
+          tradeIndex: intent.accountIndex,
+          limits,
+          amount: resolved.totalAmount.value.toString(),
+          fundingAmount: fundingAmount.value.toString(),
+          feeReserve: recycleFunding?.feeReserve.toString(),
+        })
+      } else {
+        throw new Error(`Cashu operation ${operationId} has no recoverable quote`)
+      }
 
       yield {
         type: 'payment_required',
@@ -1165,7 +1501,7 @@ function createCashuPolicy<
             decimals: fundingAmount.decimals,
           },
           description,
-          ...(quote.expiry ? { expiresAt: quote.expiry } : {}),
+          ...(quote.expiry !== null ? { expiresAt: quote.expiry } : {}),
           data: {
             method: 'cashu',
             policyType: spec.id,
@@ -1213,11 +1549,17 @@ function createCashuPolicy<
         timeoutMs: paymentTimeoutMs,
         ...(logger ? { logger } : {}),
       })
-      await options.storage.put({
-        ...(await options.storage.get(operationId))!,
-        status: 'minting',
+      operation = {
+        ...(await options.storage.get(operationId) ?? operation),
+        status: 'paid',
+        request: paidQuote.request || quote.request,
+        data: {
+          ...operation.data,
+          quoteExpiry: paidQuote.expiry,
+        },
         updatedAt: nowSeconds(options.now),
-      })
+      }
+      await options.storage.put(operation)
       logCashu(logger, 'info', 'Cashu mint quote paid; minting escrow proofs', {
         policyType: spec.id,
         mint: resolved.mint.mintUrl,
@@ -1235,10 +1577,33 @@ function createCashuPolicy<
         },
       }
 
-      const proofs = await wallet.ops
+      let mintBuilder = wallet.ops
         .mintBolt11(fundingAmount.value, paidQuote)
-        .asP2PK(resolved.target.p2pkOptions)
-        .run()
+        .asFactory(deterministicCashuP2pkFactory({
+          seed: intent.seed!,
+          requestFingerprint,
+          p2pkOptions: resolved.target.p2pkOptions,
+        }))
+      if (operation.data.mintKeysetId) mintBuilder = mintBuilder.keyset(operation.data.mintKeysetId)
+      const mintPreview = await mintBuilder.prepare()
+      if (operation.data.mintKeysetId && operation.data.mintKeysetId !== mintPreview.keysetId) {
+        throw new Error('Cashu mint keyset changed while resuming prepared outputs')
+      }
+      operation = {
+        ...operation,
+        status: 'minting',
+        data: {
+          ...operation.data,
+          mintKeysetId: mintPreview.keysetId,
+        },
+        updatedAt: nowSeconds(options.now),
+      }
+      // The exact output derivation metadata is durable before the mint call.
+      // The seed remains caller-owned and is never persisted by this driver.
+      await options.storage.put(operation)
+      const proofs = paidQuote.state === MintQuoteState.ISSUED
+        ? await restorePreparedMint(wallet, mintPreview)
+        : await wallet.completeMint(mintPreview)
       const recycleSwap = resolved.recycleTarget
         ? await prepareCashuAuctionRecycleSwap({
             wallet,
@@ -1254,6 +1619,14 @@ function createCashuPolicy<
         mintUrl: resolved.mint.mintUrl,
         unit: resolved.mint.unit,
         amount: resolved.totalAmount,
+        ...(recycleFunding
+          ? {
+              fundingFee: {
+                ...resolved.totalAmount,
+                value: recycleFunding.feeReserve,
+              },
+            }
+          : {}),
         escrowFee: resolved.escrowFee,
         tradeId: intent.tradeId,
         settlementId: intent.settlementId,
@@ -1279,12 +1652,6 @@ function createCashuPolicy<
             }
           : {}),
       })
-      await options.storage.put({
-        ...(await options.storage.get(operationId))!,
-        status: 'completed',
-        proofs: clearPaymentProofParams(proof).proofs as string[],
-        updatedAt: nowSeconds(options.now),
-      })
       logCashu(logger, 'info', 'Cashu escrow proofs minted', {
         policyType: spec.id,
         mint: resolved.mint.mintUrl,
@@ -1304,6 +1671,17 @@ function createCashuPolicy<
           amount: resolved.totalAmount.value.toString(),
         },
       }
+      // Advancing the generator after receiving `paid` acknowledges transfer
+      // of the proof to the caller. Keep only a public idempotency tombstone.
+      const completed = await options.storage.get(operationId)
+      if (completed) {
+        const { request: _request, error: _error, ...publicRecord } = completed
+        await options.storage.put({
+          ...publicRecord,
+          status: 'completed',
+          updatedAt: nowSeconds(options.now),
+        })
+      }
     }
 
     async validatePayment(request: GenericPaymentValidationRequest): Promise<GenericPaymentValidationResult> {
@@ -1322,10 +1700,13 @@ function createCashuPolicy<
         const locktime = Number(params.locktime)
         const expectedAmount = data.amount
         const proofs = proofsFromPaymentProofParams(params)
-        const amountMatched = proofAmount(proofs) >= expectedAmount
+        const amountMatched = proofAmount(proofs) === expectedAmount
+        const proofsUnique = proofs.length > 0 &&
+          new Set(proofs.map(proof => proof.secret)).size === proofs.length &&
+          new Set(proofs.map(proof => proof.C)).size === proofs.length
         const configuredMint = options.mints.find(mint => mint.mintUrl === data.mint && mint.unit === data.unit)
         const assetMatched = Boolean(configuredMint && compatibleDenomination(configuredMint.denomination, params.denomination))
-        const policyMatched = proofs.every(proof => proofPolicyMatches(proof, {
+        const policyMatched = proofsUnique && proofs.every(proof => proofPolicyMatches(proof, {
           tradeId: String(params.tradeId ?? ''),
           settlementId: String(params.settlementId ?? ''),
           locktime,
@@ -1391,7 +1772,9 @@ function createCashuPolicy<
             proofCount: proofs.length,
             paymentAmount: data.paymentAmount.toString(),
             fundedAmount: data.amount.toString(),
+            settlementAmount: data.settlementAmount.toString(),
             escrowFee: data.escrowFee.toString(),
+            fundingFee: data.fundingFee.toString(),
             locktime,
             states,
           },
@@ -1408,23 +1791,10 @@ function createCashuPolicy<
 
     async refundPayment(intent: GenericAuctionSettlementIntent & { action: 'auction_refund'; refundPercent: number }) {
       if (spec.family !== 'auction') throw new Error('Cashu escrow policy cannot refund auction bids')
-      const sourceParams = clearPaymentProofParams(intent.proof)
-      return {
-        proof: {
-          driver: 'cashu',
-          params: {
-            ...sourceParams,
-            action: 'auction_refund',
-            refundPercent: intent.refundPercent,
-            refunded: true,
-          },
-        },
-        data: {
-          method: 'cashu',
-          policyType: spec.id,
-          refundPercent: intent.refundPercent,
-        },
-      }
+      void intent
+      throw new Error(
+        'Cashu auction refunds are disabled: the current protocol does not provide a safe, idempotent refund transfer',
+      )
     }
 
     async recyclePayment(
@@ -1443,6 +1813,7 @@ function createCashuPolicy<
       const sourceData = mintedProofsData(sourceParams)
       const recycleArgs = cashuRecycleArgs(intent.recycleArgs)
       if (!recycleArgs.swap) throw new Error('Cashu auction promotion requires a prepared recycle swap')
+      verifyCashuRecycleAuthorization(recycleArgs, sourceData.participants.buyerPubkey)
       if (recycleArgs.source.tradeId !== String(sourceParams.tradeId ?? '')) {
         throw new Error('Cashu recycleArgs source trade does not match payment proof')
       }
@@ -1457,6 +1828,21 @@ function createCashuPolicy<
       }
       if (intent.targetUnlockAt !== undefined && recycleArgs.target.locktime !== intent.targetUnlockAt) {
         throw new Error('Cashu recycleArgs target locktime does not match settlement request')
+      }
+      const sourceLocktime = Number(sourceParams.locktime)
+      if (!Number.isSafeInteger(sourceLocktime)) throw new Error('Cashu auction proof has an invalid locktime')
+      const sourceProofs = proofsFromPaymentProofParams(sourceParams)
+      if (proofAmount(sourceProofs) !== sourceData.amount) {
+        throw new Error('Cashu auction source proofs do not exactly match the funded amount')
+      }
+      if (!sourceProofs.every(proof => proofPolicyMatches(proof, {
+        tradeId: recycleArgs.source.tradeId,
+        settlementId: recycleArgs.source.settlementId,
+        locktime: sourceLocktime,
+        policyType: cashuAuctionPolicyType,
+        ...sourceData.participants,
+      }))) {
+        throw new Error('Cashu auction source proof policy mismatch')
       }
       const mint = options.mints.find(candidate =>
         candidate.mintUrl === sourceData.mint && candidate.unit === sourceData.unit
@@ -1476,18 +1862,44 @@ function createCashuPolicy<
       const wallet = walletFactory(mint)
       await wallet.loadMint()
       const swap = deserializeCashuSwapPreview(recycleArgs.swap)
-      const completed = await wallet.completeSwap(swap, arbiterKey.privateKey)
-      const recycledProofs = completed.send
+      if (!sameCashuProofSet(sourceProofs, swap.inputs)) {
+        throw new Error('Cashu auction recycle inputs do not match the payment proof')
+      }
+      const sendOutputs = swap.sendOutputs ?? []
+      if (sendOutputs.length === 0) throw new Error('Cashu auction recycle swap has no target outputs')
+      const inputStates = await proofStates(wallet, swap.inputs)
+      let recycledProofs: Proof[]
+      if (everyProofUnspent(inputStates)) {
+        const completed = await wallet.completeSwap(swap, arbiterKey.privateKey)
+        recycledProofs = completed.send
+      } else if (inputStates.length > 0 && inputStates.every(state => state.state === CheckStateEnum.SPENT)) {
+        // A prior attempt consumed the inputs but lost its response. NUT-09
+        // restores the exact outputs committed by the buyer's SIG_ALL witness.
+        recycledProofs = await restoreCashuOutputs(wallet, sendOutputs, swap.keysetId)
+      } else if (anyProofPending(inputStates)) {
+        throw new Error('Cashu auction promotion is pending at the mint; retry with the same operation id')
+      } else {
+        throw new Error('Cashu auction source proofs have inconsistent spend states')
+      }
       if (recycledProofs.length === 0) throw new Error('Cashu auction promotion produced no escrow proofs')
       const recycledAmount = proofAmount(recycledProofs)
-      if (recycledAmount < sourceData.amount) {
-        throw new Error('Cashu auction promotion produced less than the funded bid amount')
+      if (recycledAmount !== sourceData.settlementAmount) {
+        throw new Error('Cashu auction promotion output does not exactly match the funded bid amount')
+      }
+      if (!recycledProofs.every(proof => proofPolicyMatches(proof, {
+        tradeId: recycleArgs.target.tradeId,
+        settlementId: recycleArgs.target.settlementId,
+        locktime: recycleArgs.target.locktime,
+        policyType: cashuEscrowPolicyType,
+        ...recycleArgs.target.participants,
+      }))) {
+        throw new Error('Cashu auction promotion output policy mismatch')
       }
       const recycledProof = cashuPaymentProof({
         policyType: cashuEscrowPolicyType,
         mintUrl: sourceData.mint,
         unit: sourceData.unit,
-        amount: cashuProofAmountTemplate(sourceParams, sourceData.amount),
+        amount: cashuProofAmountTemplate(sourceParams, sourceData.settlementAmount),
         escrowFee: cashuProofAmountTemplate(sourceParams, sourceData.escrowFee),
         tradeId: recycleArgs.target.tradeId,
         settlementId: recycleArgs.target.settlementId,
@@ -1501,6 +1913,23 @@ function createCashuPolicy<
       })
       return {
         proof: recycledProof,
+        receipt: {
+          status: 'completed',
+          operationId: intent.operationId,
+          externalId: sha256Hex(sortedJson({
+            mint: sourceData.mint,
+            sourceSettlementId: recycleArgs.source.settlementId,
+            targetSettlementId: recycleArgs.target.settlementId,
+            proofCommitments: recycledProofs.map(proof => proof.C),
+          })),
+          evidence: {
+            mint: sourceData.mint,
+            unit: sourceData.unit,
+            sourceSettlementId: recycleArgs.source.settlementId,
+            targetSettlementId: recycleArgs.target.settlementId,
+            amount: recycledAmount.toString(),
+          },
+        },
         data: {
           method: 'cashu',
           fromPolicyType: cashuAuctionPolicyType,

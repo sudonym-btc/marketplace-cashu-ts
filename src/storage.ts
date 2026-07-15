@@ -4,7 +4,37 @@ export type CashuEscrowOperationStatus =
   | 'minting'
   | 'paid'
   | 'completed'
+  | 'reconciliation_required'
   | 'failed'
+
+/**
+ * Public, allowlisted recovery metadata for a Cashu mint operation.
+ *
+ * Bearer proofs, seeds, private keys, prepared outputs, and other secret
+ * material MUST NOT be stored in this record. Mint outputs are derived again
+ * from the caller-provided marketplace seed and request fingerprint.
+ */
+export type CashuEscrowOperationData = {
+  version: 1
+  requestFingerprint: string
+  outputDerivationVersion: 1
+  policyType: 'cashu:p2pk-escrow-v1' | 'cashu:p2pk-auction-v1'
+  policyHash: string
+  conditionHash: string
+  buyerCashuPubkey: string
+  sellerCashuPubkey: string
+  arbiterCashuPubkey: string
+  locktime: number
+  fundingAmount: string
+  paymentAmount: string
+  escrowFee: string
+  denomination: string
+  decimals: number
+  description: string
+  quoteExpiry?: number | null
+  mintKeysetId?: string
+  recycleFeeReserve?: string
+}
 
 export type CashuEscrowOperation = {
   id: string
@@ -17,9 +47,8 @@ export type CashuEscrowOperation = {
   unit: string
   quoteId?: string
   request?: string
-  proofs?: string[]
   error?: string
-  data: Record<string, unknown>
+  data: CashuEscrowOperationData
   createdAt: number
   updatedAt: number
 }
@@ -34,6 +63,8 @@ export type CashuEscrowOperationQuery = {
 
 export type CashuEscrowStorage = {
   get(id: string): Promise<CashuEscrowOperation | null>
+  /** Atomically insert a new operation, returning false when the id exists. */
+  create?(record: CashuEscrowOperation): Promise<boolean>
   put(record: CashuEscrowOperation): Promise<void>
   list(query?: CashuEscrowOperationQuery): Promise<CashuEscrowOperation[]>
   delete(id: string): Promise<void>
@@ -51,7 +82,14 @@ export class MemoryCashuEscrowStore implements CashuEscrowStorage {
   private readonly records = new Map<string, CashuEscrowOperation>()
 
   async get(id: string): Promise<CashuEscrowOperation | null> {
-    return this.records.get(id) ?? null
+    const record = this.records.get(id)
+    return record ? structuredClone(record) : null
+  }
+
+  async create(record: CashuEscrowOperation): Promise<boolean> {
+    if (this.records.has(record.id)) return false
+    this.records.set(record.id, structuredClone(record))
+    return true
   }
 
   async put(record: CashuEscrowOperation): Promise<void> {

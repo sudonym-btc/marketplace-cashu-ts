@@ -34,10 +34,11 @@
     "check": "tsc --noEmit",
     "docs": "npm run docs:api",
     "docs:api": "typedoc --plugin typedoc-plugin-markdown --tsconfig tsconfig.json --name \"Marketplace Cashu Driver\" --out docs/reference --readme none --githubPages false --hideBreadcrumbs true --hidePageHeader true src/index.ts",
+    "prepack": "npm run build",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@sudonym-btc/marketplace-driver-interface": "file:../marketplace-driver-interface-ts",
+    "@sudonym-btc/marketplace-driver-interface": "0.1.0",
     "@cashu/cashu-ts": "^4.5.1",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0"

@@ -184,9 +184,7 @@ export function proofPolicyMatches(
     const secret = parseP2PKSecret(proof.secret)
     if (secret[0] !== 'P2PK') return false
     const tags = secret[1].tags ?? []
-    const policyType = tags.find(tag => tag[0] === 'policy')?.[1]
     const expectedPolicy = input.policyType ?? cashuEscrowPolicyType
-    if (policyType !== expectedPolicy) return false
     const isAuction = expectedPolicy === cashuAuctionPolicyType
     const expectedKeys = isAuction
       ? [
@@ -198,30 +196,43 @@ export function proofPolicyMatches(
           normalizePublicKey(input.sellerPubkey, 'seller cashu pubkey'),
           normalizePublicKey(input.arbiterPubkey, 'arbiter cashu pubkey'),
         ]
+    // P2PKBuilder emits the buyer as the primary lock key and the remaining
+    // lock keys in one canonical `pubkeys` tag. Requiring that exact form is
+    // important: subset checks permit an attacker to append another signer
+    // while retaining the advertised threshold.
     const lockKey = normalizePublicKey(secret[1].data, 'proof lock pubkey')
-    if (!expectedKeys.includes(lockKey)) return false
-    const additionalLockKeys = tags
-      .filter(tag => tag[0] === 'pubkeys')
-      .flatMap(tag => tag.slice(1))
-      .map(value => normalizePublicKey(value, 'proof lock pubkey'))
-    const allLockKeys = new Set([lockKey, ...additionalLockKeys])
-    if (!expectedKeys.every(key => allLockKeys.has(key))) return false
-    const locktime = tags.find(tag => tag[0] === 'locktime')?.[1]
-    if (locktime !== String(input.locktime)) return false
-    const nSigs = tags.find(tag => tag[0] === 'n_sigs')?.[1]
-    if (nSigs !== '2') return false
-    const sigFlag = tags.find(tag => tag[0] === 'sigflag')?.[1]
-    if (sigFlag !== 'SIG_ALL') return false
-    const refund = tags.filter(tag => tag[0] === 'refund').map(tag => tag[1])
+    if (lockKey !== expectedKeys[0]) return false
+    if (new Set(expectedKeys).size !== expectedKeys.length) return false
     const expectedRefund = isAuction
       ? normalizePublicKey(input.buyerPubkey, 'buyer cashu refund pubkey')
       : normalizePublicKey(input.sellerPubkey, 'seller cashu refund pubkey')
-    if (!refund.includes(expectedRefund)) return false
-    const tradeId = tags.find(tag => tag[0] === 'trade')?.[1]
-    if (tradeId !== input.tradeId) return false
-    const settlementId = tags.find(tag => tag[0] === 'settlement')?.[1]
-    if (settlementId !== input.settlementId) return false
-    return true
+    const expectedTags: string[][] = [
+      ['locktime', String(input.locktime)],
+      ['pubkeys', ...expectedKeys.slice(1)],
+      ['n_sigs', '2'],
+      ['refund', expectedRefund],
+      ['sigflag', 'SIG_ALL'],
+      ['marketplace', isAuction ? 'auction' : 'escrow'],
+      ['trade', input.tradeId],
+      ['settlement', input.settlementId],
+      ['policy', expectedPolicy],
+      ...(isAuction
+        ? [['seller', normalizePublicKey(input.sellerPubkey, 'seller cashu pubkey')]]
+        : []),
+    ]
+    if (tags.length !== expectedTags.length) return false
+    const normalizedTags = tags.map(tag => {
+      if (!Array.isArray(tag) || tag.length < 2 || tag.some(value => typeof value !== 'string')) {
+        throw new Error('Invalid Cashu P2PK tag')
+      }
+      if (tag[0] === 'pubkeys' || tag[0] === 'refund' || tag[0] === 'seller') {
+        return [tag[0], ...tag.slice(1).map(value => normalizePublicKey(value, `proof ${tag[0]} pubkey`))]
+      }
+      return [...tag]
+    })
+    const canonical = (tag: string[]) => JSON.stringify(tag)
+    return normalizedTags.map(canonical).sort().join('\n') ===
+      expectedTags.map(canonical).sort().join('\n')
   } catch {
     return false
   }
@@ -462,6 +473,7 @@ export function cashuPaymentTerms(input: {
   unit: string
   amount: CashuAmount
   paymentAmount: bigint
+  settlementAmount?: bigint
   escrowFee: bigint
   denomination: string
   decimals: number
@@ -474,6 +486,12 @@ export function cashuPaymentTerms(input: {
   const assetId = canonicalCashuAssetId(input.mintUrl, input.unit)
   const paymentAmount = termAmount(input.paymentAmount, input.denomination, input.decimals, assetId)
   const fundedAmount = termAmount(input.amount.value, input.denomination, input.decimals, assetId)
+  const settlementAmount = termAmount(
+    input.settlementAmount ?? input.amount.value,
+    input.denomination,
+    input.decimals,
+    assetId,
+  )
   const escrowFee = termAmount(input.escrowFee, input.denomination, input.decimals, assetId)
   const paths = input.policyType === cashuAuctionPolicyType && input.recycleArgs
     ? [
@@ -488,7 +506,7 @@ export function cashuPaymentTerms(input: {
             lock: cashuEscrowTermLock({
               policyType: cashuEscrowPolicyType,
               participants: input.recycleArgs.target.participants,
-              fundedAmount,
+              fundedAmount: settlementAmount,
               paymentAmount,
               escrowFee,
               tradeId: input.recycleArgs.target.tradeId,
@@ -535,6 +553,8 @@ export function cashuPaymentProof(input: {
   mintUrl: string
   unit: string
   amount: CashuAmount
+  /** Mint/input fee reserved in addition to the marketplace settlement. */
+  fundingFee?: CashuAmount
   escrowFee: CashuAmount
   tradeId: string
   settlementId: string
@@ -547,7 +567,11 @@ export function cashuPaymentProof(input: {
   recycleArgs?: CashuRecycleArgs
 }): GenericPaymentProof {
   const policyType = input.policyType ?? cashuEscrowPolicyType
-  const paymentAmount = input.amount.value - input.escrowFee.value
+  const settlementAmount = input.amount.value
+  const fundingFee = input.fundingFee?.value ?? 0n
+  if (fundingFee < 0n) throw new Error('Cashu funding fee cannot be negative')
+  const fundedAmount = settlementAmount + fundingFee
+  const paymentAmount = settlementAmount - input.escrowFee.value
   if (paymentAmount < 0n) throw new Error('Cashu escrow fee exceeds funded amount')
   const publicDenomination = input.amount.denomination.toUpperCase() === 'SAT' ? 'BTC' : input.amount.denomination
   const publicDecimals = publicDenomination.toUpperCase() === 'BTC' ? 8 : input.amount.decimals
@@ -555,8 +579,9 @@ export function cashuPaymentProof(input: {
     policyType,
     mintUrl: input.mintUrl,
     unit: input.unit,
-    amount: input.amount,
+    amount: { ...input.amount, value: fundedAmount },
     paymentAmount,
+    settlementAmount,
     escrowFee: input.escrowFee.value,
     denomination: publicDenomination,
     decimals: publicDecimals,
@@ -577,7 +602,9 @@ export function cashuPaymentProof(input: {
       ...(input.recycleArgs ? { recycleArgs: input.recycleArgs } : {}),
       mint: input.mintUrl,
       unit: input.unit,
-      amount: input.amount.value.toString(),
+      amount: fundedAmount.toString(),
+      settlementAmount: settlementAmount.toString(),
+      fundingFee: fundingFee.toString(),
       paymentAmount: paymentAmount.toString(),
       denomination: publicDenomination,
       decimals: publicDecimals,

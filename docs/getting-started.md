@@ -16,6 +16,7 @@ In the NMDK workspace, the package is consumed from the checked-out submodule.
 
 ```ts
 import {
+  createCashuAuctionPolicy,
   createCashuEscrowPolicy,
   MemoryCashuEscrowStore,
 } from '@sudonym-btc/marketplace-cashu'
@@ -32,6 +33,17 @@ const cashuPolicy = createCashuEscrowPolicy({
     },
   ],
 })
+
+const cashuAuctionPolicy = createCashuAuctionPolicy({
+  appId: 'marketplace',
+  storage: new MemoryCashuEscrowStore(),
+  mints: cashuPolicy.assets().map(asset => ({
+    mintUrl: asset.data.mintUrl as string,
+    unit: asset.data.unit as string,
+    denomination: asset.denomination,
+    decimals: asset.decimals,
+  })),
+})
 ```
 
 ## Add the driver to a marketplace runtime
@@ -41,15 +53,25 @@ const api = marketplace.bind(pool, relays, {
   seed: marketplaceSeed,
   publish,
   orderDrivers: [cashuPolicy],
-  auctionDrivers: [cashuPolicy],
+  auctionDrivers: [cashuAuctionPolicy],
 })
 ```
 
 ## Recover payment state
 
-Cashu proofs contain enough policy and proof params to validate or recover a
-published payment without device-local state. In-flight quotes can also resume
-through the storage implementation supplied to the policy.
+Cashu proofs contain bearer value. The policies require confidential proof
+parameters, and the runtime must seal them before publication. In-flight quotes
+resume through the supplied storage implementation; the store retains only
+public recovery metadata and never completed proofs or seeds. Implement atomic
+`create()` in durable stores used by multiple processes.
+
+Startup reconciles active quote states with the mint. Retrying the same payment
+intent reuses its quote and deterministically reconstructs mint outputs, which
+also permits NUT-09 restoration after a response is lost. A quote whose creation
+response was lost is marked `reconciliation_required` rather than duplicated.
+
+Auction promotion is supported. Auction refund currently fails closed because
+the protocol does not yet define a safe, idempotent refund transfer.
 
 Read the generated [API reference](reference/README.md) for policy options,
 proof storage, seed derivation, validation, and recovery types.
