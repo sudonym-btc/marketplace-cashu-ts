@@ -11,6 +11,7 @@ export type {
   CashuAuctionPolicyOptions,
   CashuEscrowPolicyOptions,
   CashuMarketplacePolicyOptions,
+  CashuPaymentAmountLimitReason,
 } from './marketplace/escrowPolicy.js'
 export type {
   CashuAuctionPaymentPolicy,
@@ -30,6 +31,8 @@ export type {
   GenericPaymentIdentity,
   GenericPaymentIntent,
   GenericPaymentProof,
+  GenericPaymentSettlementIntent,
+  GenericPaymentSettlementState,
   GenericPaymentSweepInput,
   GenericPaymentSweepState,
   GenericPaymentValidationRequest,

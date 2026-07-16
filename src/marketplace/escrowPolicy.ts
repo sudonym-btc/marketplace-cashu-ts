@@ -102,7 +102,11 @@ function logCashu(
 }
 
 type CashuPolicyPurpose = 'order' | 'bid'
-type LimitReason = 'minting_disabled' | 'unsupported_method' | 'below_minimum' | 'above_maximum'
+export type CashuPaymentAmountLimitReason =
+  | 'minting_disabled'
+  | 'unsupported_method'
+  | 'below_minimum'
+  | 'above_maximum'
 
 type CashuPolicyWatermarkContext = Parameters<CashuEscrowPolicy['discoverHighWatermark']>[0]
 type CashuPolicyStartupContext = Parameters<CashuEscrowPolicy['startup']>[0]
@@ -246,7 +250,7 @@ export class CashuPaymentAmountLimitError extends Error {
   readonly code = 'PAYMENT_AMOUNT_LIMIT'
 
   constructor(
-    readonly reason: LimitReason,
+    readonly reason: CashuPaymentAmountLimitReason,
     readonly limits: CashuPaymentAmountLimits,
   ) {
     super(formatCashuLimitMessage(reason, limits))
@@ -284,7 +288,7 @@ function amountLikeToBigInt(value: unknown): bigint | null {
   throw new Error('Invalid Cashu mint amount limit')
 }
 
-function formatCashuLimitMessage(reason: LimitReason, limits: CashuPaymentAmountLimits): string {
+function formatCashuLimitMessage(reason: CashuPaymentAmountLimitReason, limits: CashuPaymentAmountLimits): string {
   if (reason === 'minting_disabled') {
     return `Cashu minting is disabled for ${limits.method} ${limits.unit} at ${limits.mintUrl}`
   }
