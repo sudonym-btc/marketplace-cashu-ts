@@ -2,7 +2,7 @@
 
 > **CashuEscrowOperationQuery** = `object`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:27](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/storage.ts#L27)
+Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:56](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L56)
 
 ## Properties
 
@@ -10,7 +10,7 @@ Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:27](https://github
 
 > `optional` **mintUrl?**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:32](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/storage.ts#L32)
+Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:61](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L61)
 
 ***
 
@@ -18,7 +18,7 @@ Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:32](https://github
 
 > `optional` **quoteId?**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:31](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/storage.ts#L31)
+Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:60](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L60)
 
 ***
 
@@ -26,7 +26,7 @@ Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:31](https://github
 
 > `optional` **settlementId?**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:30](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/storage.ts#L30)
+Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:59](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L59)
 
 ***
 
@@ -34,7 +34,7 @@ Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:30](https://github
 
 > `optional` **status?**: [`CashuEscrowOperationStatus`](CashuEscrowOperationStatus.md) \| [`CashuEscrowOperationStatus`](CashuEscrowOperationStatus.md)[]
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:28](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/storage.ts#L28)
+Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:57](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L57)
 
 ***
 
@@ -42,4 +42,4 @@ Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:28](https://github
 
 > `optional` **tradeId?**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:29](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/storage.ts#L29)
+Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:58](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L58)

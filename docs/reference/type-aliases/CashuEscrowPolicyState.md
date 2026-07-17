@@ -2,7 +2,7 @@
 
 > **CashuEscrowPolicyState** = `object`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:132](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/types.ts#L132)
+Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:132](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L132)
 
 ## Properties
 
@@ -10,7 +10,7 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:132](https://github.
 
 > **enabled**: `boolean`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:133](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/types.ts#L133)
+Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:133](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L133)
 
 ***
 
@@ -18,7 +18,7 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:133](https://github.
 
 > `optional` **error?**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:137](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/types.ts#L137)
+Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:137](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L137)
 
 ***
 
@@ -26,7 +26,7 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:137](https://github.
 
 > **mintCount**: `number`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:135](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/types.ts#L135)
+Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:135](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L135)
 
 ***
 
@@ -34,7 +34,7 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:135](https://github.
 
 > **started**: `boolean`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:134](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/types.ts#L134)
+Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:134](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L134)
 
 ***
 
@@ -42,4 +42,4 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:134](https://github.
 
 > **startSummary**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:136](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/b14c7839d5f2ffcd86a450c02af342328274d02a/src/types.ts#L136)
+Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:136](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L136)
