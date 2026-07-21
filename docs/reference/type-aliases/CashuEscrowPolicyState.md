@@ -2,15 +2,11 @@
 
 > **CashuEscrowPolicyState** = `object`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:132](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L132)
-
 ## Properties
 
 ### enabled
 
 > **enabled**: `boolean`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:133](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L133)
 
 ***
 
@@ -18,15 +14,11 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:133](https://github.
 
 > `optional` **error?**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:137](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L137)
-
 ***
 
 ### mintCount
 
 > **mintCount**: `number`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:135](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L135)
 
 ***
 
@@ -34,12 +26,8 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:135](https://github.
 
 > **started**: `boolean`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:134](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L134)
-
 ***
 
 ### startSummary
 
 > **startSummary**: `string`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:136](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L136)

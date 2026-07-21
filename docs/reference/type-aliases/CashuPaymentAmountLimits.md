@@ -2,15 +2,11 @@
 
 > **CashuPaymentAmountLimits** = `object`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:89](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L89)
-
 ## Properties
 
 ### amount
 
 > **amount**: `object`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:94](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L94)
 
 #### decimals
 
@@ -30,15 +26,11 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:94](https://github.c
 
 > **max**: \{ `decimals`: `number`; `denomination`: `string`; `value`: `string`; \} \| `null`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:104](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L104)
-
 ***
 
 ### method
 
 > **method**: `"bolt11"`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:91](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L91)
 
 ***
 
@@ -46,15 +38,11 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:91](https://github.c
 
 > **min**: \{ `decimals`: `number`; `denomination`: `string`; `value`: `string`; \} \| `null`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:99](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L99)
-
 ***
 
 ### mintUrl
 
 > **mintUrl**: `string`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:92](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L92)
 
 ***
 
@@ -62,12 +50,8 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:92](https://github.c
 
 > **source**: `"cashu-mint"`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:90](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L90)
-
 ***
 
 ### unit
 
 > **unit**: `string`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:93](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L93)

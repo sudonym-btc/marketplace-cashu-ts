@@ -2,15 +2,11 @@
 
 > **CashuPaymentAsset** = `object`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:69](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L69)
-
 ## Properties
 
 ### appId?
 
 > `optional` **appId?**: `string`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:75](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L75)
 
 ***
 
@@ -18,23 +14,17 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:75](https://github.c
 
 > **assetId**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:71](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L71)
-
 ***
 
 ### currency?
 
 > `optional` **currency?**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:72](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L72)
-
 ***
 
 ### data
 
 > **data**: `object`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:76](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L76)
 
 #### Index Signature
 
@@ -54,20 +44,14 @@ Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:76](https://github.c
 
 > **decimals**: `number`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:74](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L74)
-
 ***
 
 ### denomination
 
 > **denomination**: `string`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:73](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L73)
-
 ***
 
 ### method
 
 > **method**: `"cashu"`
-
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:70](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L70)

@@ -2,8 +2,6 @@
 
 > **CashuEscrowPolicy** = `MarketplaceDriverOrderPolicy`\<[`GenericPolicyPaymentState`](GenericPolicyPaymentState.md), [`CashuEscrowPaymentPolicy`](CashuEscrowPaymentPolicy.md), [`CashuPaymentAsset`](CashuPaymentAsset.md), [`GenericPaymentIntent`](GenericPaymentIntent.md), [`GenericPaymentValidationRequest`](GenericPaymentValidationRequest.md), [`GenericPaymentValidationResult`](GenericPaymentValidationResult.md), [`GenericPaymentSweepInput`](GenericPaymentSweepInput.md), [`GenericPaymentSweepState`](GenericPaymentSweepState.md), [`GenericPaymentSettlementIntent`](GenericPaymentSettlementIntent.md), [`GenericPaymentSettlementState`](GenericPaymentSettlementState.md), [`GenericSwapResumeContext`](GenericSwapResumeContext.md), [`GenericSwapResumeState`](GenericSwapResumeState.md)\> & `object`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/types.ts:142](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/types.ts#L142)
-
 ## Type Declaration
 
 ### id

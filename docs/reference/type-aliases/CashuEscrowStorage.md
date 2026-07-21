@@ -2,15 +2,11 @@
 
 > **CashuEscrowStorage** = `object`
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:64](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L64)
-
 ## Methods
 
 ### create()?
 
 > `optional` **create**(`record`): `Promise`\<`boolean`\>
-
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:67](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L67)
 
 Atomically insert a new operation, returning false when the id exists.
 
@@ -30,8 +26,6 @@ Atomically insert a new operation, returning false when the id exists.
 
 > **delete**(`id`): `Promise`\<`void`\>
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:70](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L70)
-
 #### Parameters
 
 ##### id
@@ -47,8 +41,6 @@ Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:70](https://github
 ### get()
 
 > **get**(`id`): `Promise`\<[`CashuEscrowOperation`](CashuEscrowOperation.md) \| `null`\>
-
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:65](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L65)
 
 #### Parameters
 
@@ -66,8 +58,6 @@ Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:65](https://github
 
 > **list**(`query?`): `Promise`\<[`CashuEscrowOperation`](CashuEscrowOperation.md)[]\>
 
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:69](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L69)
-
 #### Parameters
 
 ##### query?
@@ -83,8 +73,6 @@ Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:69](https://github
 ### put()
 
 > **put**(`record`): `Promise`\<`void`\>
-
-Defined in: [dependencies/marketplace-cashu-ts/src/storage.ts:68](https://github.com/sudonym-btc/marketplace-cashu-ts/blob/02257a545e817cfc7aa13870cd0779c21dd89987/src/storage.ts#L68)
 
 #### Parameters
 

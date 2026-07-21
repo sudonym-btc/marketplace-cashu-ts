@@ -33,7 +33,7 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "docs": "npm run docs:api",
-    "docs:api": "typedoc --plugin typedoc-plugin-markdown --tsconfig tsconfig.json --name \"Marketplace Cashu Driver\" --out docs/reference --readme none --githubPages false --hideBreadcrumbs true --hidePageHeader true src/index.ts",
+    "docs:api": "typedoc --plugin typedoc-plugin-markdown --tsconfig tsconfig.json --name \"Marketplace Cashu Driver\" --out docs/reference --readme none --githubPages false --hideBreadcrumbs true --hidePageHeader true --disableSources src/index.ts",
     "prepack": "npm run build",
     "test": "npm run build && node --test test/*.test.mjs"
   },
