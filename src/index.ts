@@ -8,11 +8,15 @@ export {
 } from './marketplace/escrowPolicy.js'
 export {
   cashuAuctionPolicyType,
+  cashuAuctionP2pkOptions,
   cashuEscrowPolicyType,
+  cashuEscrowP2pkOptions,
   cashuRefundPolicyType,
 } from './marketplace/proof.js'
 export type {
   CashuRecycleArgs,
+  CashuEscrowParticipants,
+  CashuEscrowPolicyInput,
   CashuRefundArgs,
   CashuSerializedSwapPreview,
 } from './marketplace/proof.js'
