@@ -5,6 +5,7 @@ import {
   CheckStateEnum,
   MintQuoteState,
   OutputData,
+  SigAll,
   createP2PKsecret,
   deserializeProofs,
   parseP2PKSecret,
@@ -24,7 +25,12 @@ import {
   cashuAuctionPolicyType,
   cashuEscrowPolicyHash,
   cashuEscrowPolicyType,
+  cashuRefundAuthorization,
+  cashuRefundP2pkOptions,
+  cashuRefundPolicyType,
+  deserializeCashuSwapPreview,
   proofPolicyMatches,
+  serializeCashuSwapPreview,
 } from '../dist/marketplace/proof.js'
 
 const mint = {
@@ -67,6 +73,7 @@ function createMockWallet() {
     signedPrivateKeys: [],
     preparedMintCount: 0,
     completedMintCount: 0,
+    completedSwapCount: 0,
     restoredMintCount: 0,
   }
   const mockOutput = (amount, p2pkOptions) => ({
@@ -234,14 +241,20 @@ function createMockWallet() {
         unselectedProofs: [],
       }
     },
-    signP2PKProofs(proofs, privateKey) {
+    signP2PKProofs(proofs, privateKey, outputs = []) {
       calls.signedProofCounts.push(proofs.length)
       calls.signedPrivateKeys.push(privateKey)
+      const digest = SigAll.computeDigests(
+        proofs,
+        outputs.map(output => output.blindedMessage),
+      ).current
+      const signature = SigAll.signDigest(digest, privateKey)
       return proofs.map((proof, index) => index === 0
-        ? { ...proof, witness: { signatures: ['buyer-signature'] } }
+        ? { ...proof, witness: { signatures: [signature] } }
         : proof)
     },
     async completeSwap(preview) {
+      calls.completedSwapCount += 1
       const sendOutputs = preview.sendOutputs ?? []
       const restored = await wallet.mint.restore({
         outputs: sendOutputs.map(output => output.blindedMessage),
@@ -305,6 +318,46 @@ function createEscrowIntent(policy, overrides = {}) {
       arbiter: { data: { cashuPubkey: arbiter.publicKey } },
     },
     unlockAt: overrides.unlockAt ?? 1_800_000_000,
+  }
+}
+
+function createAuctionIntent(policy, overrides = {}) {
+  const seed = overrides.seed ?? '8'.repeat(64)
+  const seller = deriveCashuEscrowKey(overrides.sellerSeed ?? '9'.repeat(64), {
+    accountIndex: 0,
+    role: 'settlement',
+  })
+  const arbiter = deriveCashuEscrowKey(overrides.arbiterSeed ?? 'a'.repeat(64), {
+    accountIndex: 0,
+    role: 'settlement',
+  })
+  return {
+    method: 'cashu',
+    purpose: 'bid',
+    tradeId: overrides.tradeId ?? 'auction-trade-refund',
+    settlementId: overrides.settlementId ?? 'b'.repeat(64),
+    accountIndex: overrides.accountIndex ?? 30,
+    seed,
+    amount: overrides.amount ?? { value: '1500', denomination: 'SAT', decimals: 0 },
+    fee: overrides.fee ?? { value: '0', denomination: 'SAT', decimals: 0 },
+    asset: {
+      method: 'cashu',
+      assetId: canonicalCashuAssetId(mint.mintUrl, mint.unit),
+      denomination: 'SAT',
+      decimals: 0,
+      data: { mintUrl: mint.mintUrl, unit: mint.unit },
+    },
+    policy: policy.policies()[0],
+    contract: { type: cashuAuctionPolicyType, params: {} },
+    participants: {
+      seller: { data: { cashuPubkey: seller.publicKey } },
+      arbiter: { data: { cashuPubkey: arbiter.publicKey } },
+    },
+    unlockAt: overrides.unlockAt ?? 1_800_000_000,
+    metadata: {
+      targetOrderGroupId: overrides.targetOrderGroupId ?? 'target-order-refund',
+      targetOrder: { listingAnchor: '30402:listing-author:auction-refund', quantity: 1 },
+    },
   }
 }
 
@@ -559,7 +612,7 @@ test('rejects non-canonical P2PK keys, tags, thresholds, and overfunding', async
   assert.match(amountResult.error, /amount mismatch/i)
 })
 
-test('marks Cashu payment proofs confidential', () => {
+test('marks Cashu payment proofs secret', () => {
   const { wallet } = createMockWallet()
   const escrow = createCashuEscrowPolicy({
     mints: [mint],
@@ -571,8 +624,8 @@ test('marks Cashu payment proofs confidential', () => {
     storage: new MemoryCashuEscrowStore(),
     walletFactory: () => wallet,
   })
-  assert.equal(escrow.proofSensitivity, 'confidential')
-  assert.equal(auction.proofSensitivity, 'confidential')
+  assert.equal(escrow.proofSensitivity, 'secret')
+  assert.equal(auction.proofSensitivity, 'secret')
 })
 
 test('sweeps unspent Cashu proofs to a withdrawal invoice', async () => {
@@ -1143,18 +1196,204 @@ test('creates an auction bid proof with the same Cashu payment shape', async () 
   assert.equal(operation?.status, 'completed')
 })
 
-test('refuses Cashu auction refunds until a real idempotent transfer exists', async () => {
-  const { wallet } = createMockWallet()
+test('executes and idempotently restores a buyer-only Cashu auction refund', async () => {
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  wallet.getFeesForKeyset = () => Amount.from(1)
+  const prepareSwap = wallet.prepareSwapToSend.bind(wallet)
+  wallet.prepareSwapToSend = async (...args) => ({
+    ...(await prepareSwap(...args)),
+    fees: Amount.from(1),
+  })
   const policy = createCashuAuctionPolicy({
     mints: [mint],
-    storage: new MemoryCashuEscrowStore(),
+    storage: store,
     walletFactory: () => wallet,
+    quotePollIntervalMs: 0,
+    quotePaymentTimeoutMs: 1_000,
   })
+  const intent = createAuctionIntent(policy)
+  const states = []
+  for await (const state of policy.pay(intent)) states.push(state)
+  const paymentProof = states.at(-1).proof
+  assert.equal(paymentProof.params.refundArgs.type, 'cashu:p2pk-auction-refund-v1')
+  assert.equal(paymentProof.params.refundArgs.refundPercent, 100)
+  assert.equal(paymentProof.params.refundArgs.source.sourceValue, '1501')
+  assert.equal(paymentProof.params.refundArgs.source.inputFee, '1')
+  assert.equal(paymentProof.params.refundArgs.target.buyerOutputValue, '1500')
+
+  const refundIntent = {
+    purpose: 'bid',
+    action: 'auction_refund',
+    operationId: 'cashu-refund-1',
+    seed: 'a'.repeat(64),
+    refundPercent: 100,
+    proof: paymentProof,
+  }
+  const refunded = await policy.refundPayment(refundIntent)
+  assert.equal(refunded.proof.driver, cashuRefundPolicyType)
+  assert.equal(refunded.receipt.operationId, refundIntent.operationId)
+  assert.equal(refunded.receipt.evidence.sourceValue, '1501')
+  assert.equal(refunded.receipt.evidence.inputFee, '1')
+  assert.equal(refunded.receipt.evidence.buyerOutputValue, '1500')
+  assert.equal(calls.completedSwapCount, 1)
+  const [buyerProof] = deserializeProofs(refunded.proof.params.proofs)
+  const buyer = deriveCashuEscrowKey(intent.seed, {
+    accountIndex: intent.accountIndex,
+    role: 'buyer',
+  })
+  const refundSecret = parseP2PKSecret(buyerProof.secret)
+  assert.equal(refundSecret[1].data, buyer.publicKey)
+
+  wallet.checkProofsStates = async proofs => proofs.map(proof => ({
+    Y: proof.secret,
+    state: CheckStateEnum.SPENT,
+  }))
+  const recovered = await policy.refundPayment(refundIntent)
+  assert.equal(calls.completedSwapCount, 1)
+  assert.equal(recovered.receipt.externalId, refunded.receipt.externalId)
+  assert.deepEqual(recovered.proof.params.proofs, refunded.proof.params.proofs)
+
+  await assert.rejects(policy.refundPayment({
+    ...refundIntent,
+    refundPercent: 99,
+  }), /refundPercent=100/)
+})
+
+test('recovers an accepted Cashu refund after the mint response is lost', async () => {
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  wallet.getFeesForKeyset = () => Amount.from(1)
+  const prepareSwap = wallet.prepareSwapToSend.bind(wallet)
+  wallet.prepareSwapToSend = async (...args) => ({
+    ...(await prepareSwap(...args)),
+    fees: Amount.from(1),
+  })
+  const policy = createCashuAuctionPolicy({
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    quotePollIntervalMs: 0,
+    quotePaymentTimeoutMs: 1_000,
+  })
+  const intent = createAuctionIntent(policy, {
+    tradeId: 'auction-lost-refund-response',
+    settlementId: 'e'.repeat(64),
+    accountIndex: 32,
+  })
+  const states = []
+  for await (const state of policy.pay(intent)) states.push(state)
+  let sourceSpent = false
+  wallet.checkProofsStates = async proofs => proofs.map(proof => ({
+    Y: proof.secret,
+    state: sourceSpent ? CheckStateEnum.SPENT : CheckStateEnum.UNSPENT,
+  }))
+  const completeSwap = wallet.completeSwap.bind(wallet)
+  wallet.completeSwap = async (...args) => {
+    await completeSwap(...args)
+    sourceSpent = true
+    throw new Error('connection lost after refund swap was accepted')
+  }
+  const refundIntent = {
+    purpose: 'bid',
+    action: 'auction_refund',
+    operationId: 'cashu-refund-lost-response',
+    seed: 'a'.repeat(64),
+    refundPercent: 100,
+    proof: states.at(-1).proof,
+  }
+  await assert.rejects(policy.refundPayment(refundIntent), /connection lost after refund swap/)
+  assert.equal(calls.completedSwapCount, 1)
+
+  const recovered = await policy.refundPayment(refundIntent)
+  assert.equal(recovered.receipt.status, 'completed')
+  assert.equal(recovered.receipt.operationId, refundIntent.operationId)
+  assert.equal(recovered.receipt.evidence.buyerOutputValue, '1500')
+  assert.equal(calls.completedSwapCount, 1)
+})
+
+test('rejects malicious Cashu refund packets before mint I/O', async () => {
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  wallet.getFeesForKeyset = () => Amount.from(1)
+  const prepareSwap = wallet.prepareSwapToSend.bind(wallet)
+  wallet.prepareSwapToSend = async (...args) => ({
+    ...(await prepareSwap(...args)),
+    fees: Amount.from(1),
+  })
+  const policy = createCashuAuctionPolicy({
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    quotePollIntervalMs: 0,
+    quotePaymentTimeoutMs: 1_000,
+  })
+  const intent = createAuctionIntent(policy, {
+    tradeId: 'auction-malicious-refund',
+    settlementId: 'c'.repeat(64),
+    accountIndex: 31,
+  })
+  const states = []
+  for await (const state of policy.pay(intent)) states.push(state)
+  const paymentProof = states.at(-1).proof
+  const originalArgs = paymentProof.params.refundArgs
+  const buyer = deriveCashuEscrowKey(intent.seed, {
+    accountIndex: intent.accountIndex,
+    role: 'buyer',
+  })
+  const attacker = deriveCashuEscrowKey('d'.repeat(64), {
+    accountIndex: 0,
+    role: 'buyer',
+  })
+  const attackerOutput = OutputData.createSingleP2PKData(cashuRefundP2pkOptions({
+    buyerPubkey: attacker.publicKey,
+    tradeId: intent.tradeId,
+    settlementId: intent.settlementId,
+  }), Amount.from(1500), originalArgs.source.keysetId)
+  const maliciousPreview = deserializeCashuSwapPreview(originalArgs.swap)
+  const maliciousSwap = serializeCashuSwapPreview({
+    ...maliciousPreview,
+    inputs: wallet.signP2PKProofs(
+      maliciousPreview.inputs,
+      buyer.privateKey,
+      [attackerOutput],
+    ),
+    sendOutputs: [attackerOutput],
+  })
+  const maliciousArgs = cashuRefundAuthorization({
+    buyerPrivateKey: buyer.privateKey,
+    buyerPubkey: buyer.publicKey,
+    source: originalArgs.source,
+    target: originalArgs.target,
+    swap: maliciousSwap,
+  })
+  const maliciousProof = {
+    ...paymentProof,
+    params: {
+      ...paymentProof.params,
+      refundArgs: maliciousArgs,
+    },
+  }
+  const completedBefore = calls.completedSwapCount
   await assert.rejects(policy.refundPayment({
     purpose: 'bid',
     action: 'auction_refund',
-    operationId: 'cashu-refund-disabled-1',
+    operationId: 'cashu-malicious-refund',
+    seed: 'a'.repeat(64),
     refundPercent: 100,
-    proof: { driver: cashuAuctionPolicyType, params: {} },
-  }), /refunds are disabled/i)
+    proof: maliciousProof,
+  }), /buyer-only and canonical/)
+  assert.equal(calls.completedSwapCount, completedBefore)
+
+  const tamperedValueProof = structuredClone(paymentProof)
+  tamperedValueProof.params.refundArgs.source.inputFee = '2'
+  await assert.rejects(policy.refundPayment({
+    purpose: 'bid',
+    action: 'auction_refund',
+    operationId: 'cashu-tampered-refund',
+    seed: 'a'.repeat(64),
+    refundPercent: 100,
+    proof: tamperedValueProof,
+  }), /message is not canonical|values do not match/)
+  assert.equal(calls.completedSwapCount, completedBefore)
 })

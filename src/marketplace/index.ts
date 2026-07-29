@@ -3,6 +3,16 @@ export {
   createCashuAuctionPolicy,
   createCashuEscrowPolicy,
 } from './escrowPolicy.js'
+export {
+  cashuAuctionPolicyType,
+  cashuEscrowPolicyType,
+  cashuRefundPolicyType,
+} from './proof.js'
+export type {
+  CashuRecycleArgs,
+  CashuRefundArgs,
+  CashuSerializedSwapPreview,
+} from './proof.js'
 
 export type {
   CashuAuctionPolicyOptions,

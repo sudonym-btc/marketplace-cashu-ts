@@ -30,6 +30,7 @@ import { normalizePublicKey } from '../utils/hex.js'
 
 export const cashuEscrowPolicyType = 'cashu:p2pk-escrow-v1' as const
 export const cashuAuctionPolicyType = 'cashu:p2pk-auction-v1' as const
+export const cashuRefundPolicyType = 'cashu:p2pk-refund-v1' as const
 
 export type CashuP2pkPolicyType = typeof cashuEscrowPolicyType | typeof cashuAuctionPolicyType
 
@@ -72,6 +73,32 @@ export type CashuRecycleArgs = {
     order?: Record<string, unknown>
   }
   swap?: CashuSerializedSwapPreview
+}
+
+export type CashuRefundArgs = {
+  version: 1
+  type: 'cashu:p2pk-auction-refund-v1'
+  refundPercent: 100
+  source: {
+    tradeId: string
+    settlementId: string
+    policyType: typeof cashuAuctionPolicyType
+    mint: string
+    unit: string
+    sourceValue: string
+    inputFee: string
+    keysetId: string
+  }
+  target: {
+    policyType: typeof cashuRefundPolicyType
+    buyerPubkey: string
+    buyerOutputValue: string
+  }
+  message: string
+  messageHash: string
+  signerPubkey: string
+  signature: string
+  swap: CashuSerializedSwapPreview
 }
 
 export type CashuSerializedSwapPreview = {
@@ -176,6 +203,47 @@ export function cashuAuctionP2pkOptions(input: CashuEscrowPolicyInput) {
     .toOptions()
 }
 
+export function cashuRefundP2pkOptions(input: Pick<CashuEscrowPolicyInput,
+  'buyerPubkey' | 'tradeId' | 'settlementId'>) {
+  return new P2PKBuilder()
+    .addLockPubkey(normalizePublicKey(input.buyerPubkey, 'buyer cashu refund pubkey'))
+    .requireLockSignatures(1)
+    .sigAll()
+    .addTags([
+      ['marketplace', 'auction-refund'],
+      ['trade', input.tradeId],
+      ['settlement', input.settlementId],
+      ['policy', cashuRefundPolicyType],
+    ])
+    .toOptions()
+}
+
+export function refundProofPolicyMatches(
+  proof: Proof,
+  input: Pick<CashuEscrowPolicyInput, 'buyerPubkey' | 'tradeId' | 'settlementId'>,
+): boolean {
+  try {
+    const secret = parseP2PKSecret(proof.secret)
+    if (secret[0] !== 'P2PK') return false
+    const buyerPubkey = normalizePublicKey(input.buyerPubkey, 'buyer cashu refund pubkey')
+    if (normalizePublicKey(secret[1].data, 'proof refund pubkey') !== buyerPubkey) return false
+    const tags = secret[1].tags ?? []
+    const expectedTags: string[][] = [
+      ['sigflag', 'SIG_ALL'],
+      ['marketplace', 'auction-refund'],
+      ['trade', input.tradeId],
+      ['settlement', input.settlementId],
+      ['policy', cashuRefundPolicyType],
+    ]
+    if (tags.length !== expectedTags.length) return false
+    const canonical = (tag: string[]) => JSON.stringify(tag)
+    return tags.map(tag => [...tag]).map(canonical).sort().join('\n') ===
+      expectedTags.map(canonical).sort().join('\n')
+  } catch {
+    return false
+  }
+}
+
 export function proofPolicyMatches(
   proof: Proof,
   input: CashuEscrowPolicyInput,
@@ -275,6 +343,40 @@ export function cashuPromotionAuthorization(input: {
     signature: bytesToHex(schnorr.sign(digest, hexToBytes(input.buyerPrivateKey))),
     target,
     ...(input.swap ? { swap: input.swap } : {}),
+  }
+}
+
+export function cashuRefundAuthorization(input: {
+  buyerPrivateKey: string
+  buyerPubkey: string
+  source: CashuRefundArgs['source']
+  target: CashuRefundArgs['target']
+  swap: CashuSerializedSwapPreview
+}): CashuRefundArgs {
+  const target = {
+    ...input.target,
+    buyerPubkey: normalizePublicKey(input.target.buyerPubkey, 'buyer cashu refund pubkey'),
+  }
+  const message = JSON.stringify({
+    version: 1,
+    type: 'cashu:p2pk-auction-refund-v1',
+    refundPercent: 100,
+    source: input.source,
+    target,
+    swap: input.swap,
+  })
+  const digest = sha256(new TextEncoder().encode(message))
+  return {
+    version: 1,
+    type: 'cashu:p2pk-auction-refund-v1',
+    refundPercent: 100,
+    source: input.source,
+    target,
+    message,
+    messageHash: `0x${bytesToHex(digest)}`,
+    signerPubkey: normalizePublicKey(input.buyerPubkey, 'buyer cashu pubkey'),
+    signature: bytesToHex(schnorr.sign(digest, hexToBytes(input.buyerPrivateKey))),
+    swap: input.swap,
   }
 }
 
@@ -482,6 +584,7 @@ export function cashuPaymentTerms(input: {
   participants: CashuEscrowParticipants
   locktime: number
   recycleArgs?: CashuRecycleArgs
+  refundArgs?: CashuRefundArgs
 }): MarketplaceDriverPaymentTerms {
   const assetId = canonicalCashuAssetId(input.mintUrl, input.unit)
   const paymentAmount = termAmount(input.paymentAmount, input.denomination, input.decimals, assetId)
@@ -493,9 +596,9 @@ export function cashuPaymentTerms(input: {
     assetId,
   )
   const escrowFee = termAmount(input.escrowFee, input.denomination, input.decimals, assetId)
-  const paths = input.policyType === cashuAuctionPolicyType && input.recycleArgs
+  const paths: MarketplaceDriverPaymentTermPath[] | undefined = input.policyType === cashuAuctionPolicyType
     ? [
-        {
+        ...(input.recycleArgs ? [{
           id: 'promote',
           requires: [
             { role: 'buyer', condition: 'signature' },
@@ -514,14 +617,25 @@ export function cashuPaymentTerms(input: {
               locktime: input.recycleArgs.target.locktime,
             }),
           },
-        },
+        }] : []),
+        ...(input.refundArgs ? [{
+          id: 'refund',
+          requires: [
+            { role: 'buyer', condition: 'signature' },
+            { role: 'arbiter', condition: 'signature' },
+          ],
+          result: {
+            type: 'terminal' as const,
+            outputs: [termOutput('buyer', input.participants.buyerPubkey, settlementAmount)],
+          },
+        }] : []),
         {
           id: 'timeout',
           after: input.locktime,
           requires: [{ role: 'buyer', condition: 'timeout' }],
           result: {
             type: 'terminal' as const,
-            outputs: [termOutput('buyer', input.participants.buyerPubkey, fundedAmount)],
+            outputs: [termOutput('buyer', input.participants.buyerPubkey, settlementAmount)],
           },
         },
       ]
@@ -565,6 +679,7 @@ export function cashuPaymentProof(input: {
   policyHash: string
   conditionHash: string
   recycleArgs?: CashuRecycleArgs
+  refundArgs?: CashuRefundArgs
 }): GenericPaymentProof {
   const policyType = input.policyType ?? cashuEscrowPolicyType
   const settlementAmount = input.amount.value
@@ -590,6 +705,7 @@ export function cashuPaymentProof(input: {
     participants: input.participants,
     locktime: input.locktime,
     ...(input.recycleArgs ? { recycleArgs: input.recycleArgs } : {}),
+    ...(input.refundArgs ? { refundArgs: input.refundArgs } : {}),
   })
   return {
     driver: policyType,
@@ -600,6 +716,7 @@ export function cashuPaymentProof(input: {
       policyHash: input.policyHash,
       conditionHash: input.conditionHash,
       ...(input.recycleArgs ? { recycleArgs: input.recycleArgs } : {}),
+      ...(input.refundArgs ? { refundArgs: input.refundArgs } : {}),
       mint: input.mintUrl,
       unit: input.unit,
       amount: fundedAmount.toString(),
@@ -614,6 +731,71 @@ export function cashuPaymentProof(input: {
       quoteId: input.quoteId,
       locktime: input.locktime,
       participants: input.participants,
+      proofs: serializeProofs(input.proofs),
+    },
+  }
+}
+
+export function cashuRefundProof(input: {
+  mintUrl: string
+  unit: string
+  amount: CashuAmount
+  tradeId: string
+  settlementId: string
+  operationId: string
+  buyerPubkey: string
+  sourceMessageHash: string
+  proofs: Proof[]
+}): GenericPaymentProof {
+  const buyerPubkey = normalizePublicKey(input.buyerPubkey, 'buyer cashu refund pubkey')
+  const publicDenomination = input.amount.denomination.toUpperCase() === 'SAT'
+    ? 'BTC'
+    : input.amount.denomination
+  const publicDecimals = publicDenomination.toUpperCase() === 'BTC' ? 8 : input.amount.decimals
+  const assetId = canonicalCashuAssetId(input.mintUrl, input.unit)
+  const refundAmount = termAmount(input.amount.value, publicDenomination, publicDecimals, assetId)
+  return {
+    driver: cashuRefundPolicyType,
+    terms: {
+      version: 1,
+      asset: refundAmount,
+      parties: [{ role: 'buyer', id: buyerPubkey }],
+      lock: {
+        id: input.settlementId,
+        policyId: cashuRefundPolicyType,
+        kind: 'direct',
+        amount: refundAmount,
+        controls: [{ role: 'buyer', id: buyerPubkey }],
+        threshold: 1,
+        conditions: {
+          tradeId: input.tradeId,
+          settlementId: input.settlementId,
+          operationId: input.operationId,
+          sourceMessageHash: input.sourceMessageHash,
+        },
+        paths: [{
+          id: 'claim',
+          requires: [{ role: 'buyer', condition: 'signature' }],
+          result: {
+            type: 'terminal',
+            outputs: [termOutput('buyer', buyerPubkey, refundAmount)],
+          },
+        }],
+      },
+    },
+    params: {
+      version: 1,
+      policyType: cashuRefundPolicyType,
+      mint: input.mintUrl,
+      unit: input.unit,
+      amount: input.amount.value.toString(),
+      denomination: publicDenomination,
+      decimals: publicDecimals,
+      tradeId: input.tradeId,
+      settlementId: input.settlementId,
+      operationId: input.operationId,
+      buyerPubkey,
+      sourceMessageHash: input.sourceMessageHash,
       proofs: serializeProofs(input.proofs),
     },
   }

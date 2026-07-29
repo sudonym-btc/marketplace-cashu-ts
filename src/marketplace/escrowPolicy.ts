@@ -3,8 +3,10 @@ import {
   CheckStateEnum,
   MintQuoteState,
   OutputData,
+  SigAll,
   Wallet,
   blindMessage,
+  getP2PKWitnessSignatures,
   type MintQuoteBolt11Response,
   type MintPreview,
   type OutputDataFactory,
@@ -55,6 +57,10 @@ import {
   cashuAuctionPolicyHash,
   cashuAuctionPolicyType,
   cashuPromotionAuthorization,
+  cashuRefundAuthorization,
+  cashuRefundP2pkOptions,
+  cashuRefundPolicyType,
+  cashuRefundProof,
   canonicalCashuAssetId,
   cashuEscrowP2pkOptions,
   cashuEscrowPolicyHash,
@@ -67,11 +73,13 @@ import {
   everyProofUnspent,
   proofAmount,
   proofPolicyMatches,
+  refundProofPolicyMatches,
   proofStates,
   proofsFromPaymentProof,
   proofsFromPaymentProofParams,
   serializeCashuSwapPreview,
   type CashuEscrowParticipants,
+  type CashuRefundArgs,
   type CashuRecycleArgs,
 } from './proof.js'
 
@@ -507,6 +515,60 @@ async function prepareCashuAuctionRecycleSwap(input: {
   })
 }
 
+async function prepareCashuAuctionRefundSwap(input: {
+  wallet: Wallet
+  amount: bigint
+  feeReserve: bigint
+  proofs: Proof[]
+  buyerPrivateKey: string
+  buyerPubkey: string
+  tradeId: string
+  settlementId: string
+}): Promise<CashuSerializedRefundPreparation> {
+  const p2pkOptions = cashuRefundP2pkOptions({
+    buyerPubkey: input.buyerPubkey,
+    tradeId: input.tradeId,
+    settlementId: input.settlementId,
+  })
+  const preview = await input.wallet.prepareSwapToSend(
+    input.amount,
+    input.proofs,
+    { includeFees: false },
+    {
+      send: { type: 'p2pk', options: p2pkOptions },
+      keep: input.wallet.defaultOutputType(),
+    },
+  )
+  const actualFee = cashuAmountToBigInt(preview.fees)
+  if (actualFee !== input.feeReserve) {
+    throw new Error(`Cashu auction refund fee reserve mismatch: expected ${input.feeReserve.toString()}, got ${actualFee.toString()}`)
+  }
+  const sourceValue = proofAmount(input.proofs)
+  if (sourceValue !== input.amount + actualFee) {
+    throw new Error('Cashu auction refund source value does not equal buyer output plus input fee')
+  }
+  if ((preview.keepOutputs?.length ?? 0) > 0 || (preview.unselectedProofs?.length ?? 0) > 0) {
+    throw new Error('Cashu auction refund must not retain change or unselected source proofs')
+  }
+  const outputs = [...(preview.keepOutputs ?? []), ...(preview.sendOutputs ?? [])]
+  return {
+    swap: serializeCashuSwapPreview({
+      ...preview,
+      inputs: input.wallet.signP2PKProofs(preview.inputs, input.buyerPrivateKey, outputs),
+    }),
+    sourceValue,
+    inputFee: actualFee,
+    buyerOutputValue: input.amount,
+  }
+}
+
+type CashuSerializedRefundPreparation = {
+  swap: CashuRefundArgs['swap']
+  sourceValue: bigint
+  inputFee: bigint
+  buyerOutputValue: bigint
+}
+
 function cashuAmountToBigInt(value: unknown): bigint {
   if (typeof value === 'bigint') return value
   if (typeof value === 'number') return BigInt(value)
@@ -738,6 +800,12 @@ function stringValue(value: unknown, label: string): string {
   return value
 }
 
+function amountStringValue(value: unknown, label: string): string {
+  const amount = stringValue(value, label)
+  if (!/^(0|[1-9]\d*)$/.test(amount)) throw new Error(`Invalid ${label}`)
+  return amount
+}
+
 function numberValue(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new Error(`Invalid ${label}`)
   return value
@@ -828,6 +896,73 @@ function verifyCashuRecycleAuthorization(args: CashuRecycleArgs, buyerPubkey: st
   }
 }
 
+function cashuRefundArgs(value: unknown): CashuRefundArgs {
+  const args = recordValue(value, 'refundArgs')
+  if (args.version !== 1 || args.type !== 'cashu:p2pk-auction-refund-v1' || args.refundPercent !== 100) {
+    throw new Error('Invalid Cashu auction refundArgs type or refund percentage')
+  }
+  const source = recordValue(args.source, 'refundArgs.source')
+  if (source.policyType !== cashuAuctionPolicyType) {
+    throw new Error('Invalid Cashu auction refundArgs source policy')
+  }
+  const target = recordValue(args.target, 'refundArgs.target')
+  if (target.policyType !== cashuRefundPolicyType) {
+    throw new Error('Invalid Cashu auction refundArgs target policy')
+  }
+  return {
+    version: 1,
+    type: 'cashu:p2pk-auction-refund-v1',
+    refundPercent: 100,
+    source: {
+      tradeId: stringValue(source.tradeId, 'refundArgs.source.tradeId'),
+      settlementId: stringValue(source.settlementId, 'refundArgs.source.settlementId'),
+      policyType: cashuAuctionPolicyType,
+      mint: stringValue(source.mint, 'refundArgs.source.mint'),
+      unit: stringValue(source.unit, 'refundArgs.source.unit'),
+      sourceValue: amountStringValue(source.sourceValue, 'refundArgs.source.sourceValue'),
+      inputFee: amountStringValue(source.inputFee, 'refundArgs.source.inputFee'),
+      keysetId: stringValue(source.keysetId, 'refundArgs.source.keysetId'),
+    },
+    target: {
+      policyType: cashuRefundPolicyType,
+      buyerPubkey: stringValue(target.buyerPubkey, 'refundArgs.target.buyerPubkey'),
+      buyerOutputValue: amountStringValue(target.buyerOutputValue, 'refundArgs.target.buyerOutputValue'),
+    },
+    message: stringValue(args.message, 'refundArgs.message'),
+    messageHash: stringValue(args.messageHash, 'refundArgs.messageHash'),
+    signerPubkey: stringValue(args.signerPubkey, 'refundArgs.signerPubkey'),
+    signature: stringValue(args.signature, 'refundArgs.signature'),
+    swap: recordValue(args.swap, 'refundArgs.swap') as CashuRefundArgs['swap'],
+  }
+}
+
+function verifyCashuRefundAuthorization(args: CashuRefundArgs, buyerPubkey: string): void {
+  const normalizedBuyer = buyerPubkey.toLowerCase()
+  if (args.signerPubkey.toLowerCase() !== normalizedBuyer || args.target.buyerPubkey.toLowerCase() !== normalizedBuyer) {
+    throw new Error('Cashu refund authorization signer and target must be the bid buyer')
+  }
+  const canonicalMessage = JSON.stringify({
+    version: 1,
+    type: 'cashu:p2pk-auction-refund-v1',
+    refundPercent: 100,
+    source: args.source,
+    target: args.target,
+    swap: args.swap,
+  })
+  if (args.message !== canonicalMessage) {
+    throw new Error('Cashu refund authorization message is not canonical')
+  }
+  const digest = sha256(new TextEncoder().encode(canonicalMessage))
+  if (args.messageHash.toLowerCase() !== `0x${bytesToHex(digest)}`) {
+    throw new Error('Cashu refund authorization message hash mismatch')
+  }
+  const pubkey = hexToBytes(args.signerPubkey)
+  const xOnlyPubkey = pubkey.length === 33 ? pubkey.slice(1) : pubkey
+  if (!schnorr.verify(hexToBytes(args.signature), digest, xOnlyPubkey)) {
+    throw new Error('Invalid Cashu refund authorization signature')
+  }
+}
+
 function cashuProofIdentity(proof: ProofLike): string {
   return sortedJson({
     id: proof.id,
@@ -840,6 +975,82 @@ function cashuProofIdentity(proof: ProofLike): string {
 function sameCashuProofSet(left: ProofLike[], right: ProofLike[]): boolean {
   return left.length === right.length &&
     left.map(cashuProofIdentity).sort().join('\n') === right.map(cashuProofIdentity).sort().join('\n')
+}
+
+function validatedCashuRefundSwap(
+  args: CashuRefundArgs,
+  sourceParams: Record<string, unknown>,
+  sourceData: ReturnType<typeof mintedProofsData>,
+  sourceProofs: Proof[],
+): ReturnType<typeof deserializeCashuSwapPreview> {
+  verifyCashuRefundAuthorization(args, sourceData.participants.buyerPubkey)
+  if (args.source.tradeId !== String(sourceParams.tradeId ?? '') ||
+      args.source.settlementId !== String(sourceParams.settlementId ?? '')) {
+    throw new Error('Cashu refund source ids do not match the payment proof')
+  }
+  if (args.source.mint !== sourceData.mint || args.source.unit !== sourceData.unit) {
+    throw new Error('Cashu refund mint or unit does not match the payment proof')
+  }
+  if (BigInt(args.source.sourceValue) !== sourceData.amount ||
+      BigInt(args.source.inputFee) !== sourceData.fundingFee ||
+      BigInt(args.target.buyerOutputValue) !== sourceData.settlementAmount) {
+    throw new Error('Cashu refund values do not match the funded payment')
+  }
+  if (sourceData.amount !== sourceData.settlementAmount + sourceData.fundingFee) {
+    throw new Error('Cashu refund source value is not conserved')
+  }
+  const swap = deserializeCashuSwapPreview(args.swap)
+  if (swap.keysetId !== args.source.keysetId) {
+    throw new Error('Cashu refund output keyset does not match its authorization')
+  }
+  if (cashuAmountToBigInt(swap.amount) !== sourceData.settlementAmount ||
+      cashuAmountToBigInt(swap.fees) !== sourceData.fundingFee) {
+    throw new Error('Cashu refund swap amount or fee does not match its authorization')
+  }
+  if (!sameCashuProofSet(sourceProofs, swap.inputs)) {
+    throw new Error('Cashu refund swap inputs do not match the payment proof')
+  }
+  if ((swap.keepOutputs?.length ?? 0) > 0 || (swap.unselectedProofs?.length ?? 0) > 0) {
+    throw new Error('Cashu refund swap must not retain change or unselected proofs')
+  }
+  const sendOutputs = swap.sendOutputs ?? []
+  if (sendOutputs.length === 0) throw new Error('Cashu refund swap has no buyer outputs')
+  const sigAllOutputs = [...(swap.keepOutputs ?? []), ...sendOutputs]
+    .map(output => output.blindedMessage)
+  const currentDigest = SigAll.computeDigests(swap.inputs, sigAllOutputs).current
+  const buyerPubkey = hexToBytes(sourceData.participants.buyerPubkey)
+  const buyerXOnly = buyerPubkey.length === 33 ? buyerPubkey.slice(1) : buyerPubkey
+  const buyerSignatures = getP2PKWitnessSignatures(swap.inputs[0]?.witness)
+  if (!buyerSignatures.some(signature => schnorr.verify(
+    hexToBytes(signature),
+    hexToBytes(currentDigest),
+    buyerXOnly,
+  ))) {
+    throw new Error('Cashu refund swap is missing the buyer SIG_ALL authorization')
+  }
+  const sendTotal = sendOutputs.reduce(
+    (sum, output) => sum + cashuAmountToBigInt(output.blindedMessage.amount),
+    0n,
+  )
+  if (sendTotal !== sourceData.settlementAmount) {
+    throw new Error('Cashu refund buyer outputs do not equal the recoverable value')
+  }
+  if (sendOutputs.some(output => output.blindedMessage.id !== args.source.keysetId)) {
+    throw new Error('Cashu refund output uses an unauthorized keyset')
+  }
+  if (!sendOutputs.every(output => refundProofPolicyMatches({
+    id: output.blindedMessage.id,
+    amount: output.blindedMessage.amount,
+    secret: new TextDecoder().decode(output.secret),
+    C: '',
+  }, {
+    buyerPubkey: sourceData.participants.buyerPubkey,
+    tradeId: args.source.tradeId,
+    settlementId: args.source.settlementId,
+  }))) {
+    throw new Error('Cashu refund output policy is not buyer-only and canonical')
+  }
+  return swap
 }
 
 function sortedJson(value: unknown): string {
@@ -965,6 +1176,13 @@ function validateCashuPaymentTerms(
   const recycleArgs = params.recycleArgs === undefined || params.recycleArgs === null
     ? undefined
     : cashuRecycleArgs(params.recycleArgs)
+  const refundArgs = params.refundArgs === undefined || params.refundArgs === null
+    ? undefined
+    : cashuRefundArgs(params.refundArgs)
+  if (refundArgs) {
+    const sourceProofs = proofsFromPaymentProofParams(params)
+    validatedCashuRefundSwap(refundArgs, params, data, sourceProofs)
+  }
   const expectedTerms = cashuPaymentTerms({
     policyType,
     mintUrl: data.mint,
@@ -984,6 +1202,7 @@ function validateCashuPaymentTerms(
     participants: data.participants,
     locktime: Number(params.locktime),
     ...(recycleArgs ? { recycleArgs } : {}),
+    ...(refundArgs ? { refundArgs } : {}),
   })
   if (sortedJson(proof.terms) !== sortedJson(expectedTerms)) {
     return 'Cashu payment public terms do not match proof evidence'
@@ -1110,7 +1329,7 @@ function createCashuPolicy<
         method: 'cashu',
         id: spec.id,
         label: spec.label,
-        proofSensitivity: 'confidential',
+        proofSensitivity: 'secret',
         purpose: spec.purpose,
         family: spec.family,
         initialState: {
@@ -1618,6 +1837,40 @@ function createCashuPolicy<
             ...(recycleFunding ? { feeReserve: recycleFunding.feeReserve } : {}),
           })
         : undefined
+      const refundPreparation = spec.id === cashuAuctionPolicyType
+        ? await prepareCashuAuctionRefundSwap({
+            wallet,
+            amount: resolved.totalAmount.value,
+            feeReserve: recycleFunding!.feeReserve,
+            proofs,
+            buyerPrivateKey: resolved.buyerKey.privateKey,
+            buyerPubkey: resolved.buyerKey.publicKey,
+            tradeId: intent.tradeId,
+            settlementId: intent.settlementId,
+          })
+        : undefined
+      const refundArgs = refundPreparation
+        ? cashuRefundAuthorization({
+            buyerPrivateKey: resolved.buyerKey.privateKey,
+            buyerPubkey: resolved.buyerKey.publicKey,
+            source: {
+              tradeId: intent.tradeId,
+              settlementId: intent.settlementId,
+              policyType: cashuAuctionPolicyType,
+              mint: resolved.mint.mintUrl,
+              unit: resolved.mint.unit,
+              sourceValue: refundPreparation.sourceValue.toString(),
+              inputFee: refundPreparation.inputFee.toString(),
+              keysetId: refundPreparation.swap.keysetId,
+            },
+            target: {
+              policyType: cashuRefundPolicyType,
+              buyerPubkey: resolved.buyerKey.publicKey,
+              buyerOutputValue: refundPreparation.buyerOutputValue.toString(),
+            },
+            swap: refundPreparation.swap,
+          })
+        : undefined
       const proof = cashuPaymentProof({
         policyType: spec.id,
         mintUrl: resolved.mint.mintUrl,
@@ -1653,6 +1906,7 @@ function createCashuPolicy<
                 target: resolved.recycleTarget!,
                 ...(recycleSwap ? { swap: recycleSwap } : {}),
               }),
+              refundArgs: refundArgs!,
             }
           : {}),
       })
@@ -1795,10 +2049,126 @@ function createCashuPolicy<
 
     async refundPayment(intent: GenericAuctionSettlementIntent & { action: 'auction_refund'; refundPercent: number }) {
       if (spec.family !== 'auction') throw new Error('Cashu escrow policy cannot refund auction bids')
-      void intent
-      throw new Error(
-        'Cashu auction refunds are disabled: the current protocol does not provide a safe, idempotent refund transfer',
-      )
+      if (intent.refundPercent !== 100) {
+        throw new Error('Cashu auction refunds require refundPercent=100')
+      }
+      if (!intent.operationId) throw new Error('Cashu auction refund requires an operation id')
+      if (!intent.seed) throw new Error('Cashu auction refund requires the arbiter marketplace seed')
+      const sourceParams = clearPaymentProofParams(intent.proof)
+      const sourceData = mintedProofsData(sourceParams)
+      const rawRefundArgs = sourceParams.refundArgs
+      if (rawRefundArgs === undefined || rawRefundArgs === null) {
+        throw new Error('Cashu auction refund requires pre-authorized refundArgs')
+      }
+      const refundArgs = cashuRefundArgs(rawRefundArgs)
+      const sourceProofs = proofsFromPaymentProofParams(sourceParams)
+      if (proofAmount(sourceProofs) !== sourceData.amount) {
+        throw new Error('Cashu auction refund source proofs do not exactly match the funded amount')
+      }
+      const sourceLocktime = Number(sourceParams.locktime)
+      if (!Number.isSafeInteger(sourceLocktime)) throw new Error('Cashu auction proof has an invalid locktime')
+      if (!sourceProofs.every(proof => proofPolicyMatches(proof, {
+        tradeId: refundArgs.source.tradeId,
+        settlementId: refundArgs.source.settlementId,
+        locktime: sourceLocktime,
+        policyType: cashuAuctionPolicyType,
+        ...sourceData.participants,
+      }))) {
+        throw new Error('Cashu auction refund source proof policy mismatch')
+      }
+      // Validate the complete buyer-signed packet before loading or calling a
+      // mint. This prevents a malicious target, fee, keyset, or input set from
+      // reaching the financial side effect.
+      const swap = validatedCashuRefundSwap(refundArgs, sourceParams, sourceData, sourceProofs)
+      const mint = options.mints.find(candidate =>
+        candidate.mintUrl === sourceData.mint && candidate.unit === sourceData.unit)
+      if (!mint) throw new Error('Cashu auction refund mint is not configured')
+      const arbiterKey = deriveCashuEscrowKey(intent.seed, {
+        accountIndex: 0,
+        role: 'settlement',
+      })
+      if (arbiterKey.publicKey.toLowerCase() !== sourceData.participants.arbiterPubkey.toLowerCase()) {
+        throw new Error('Cashu auction refund requires the local arbiter Cashu key')
+      }
+      const wallet = walletFactory(mint)
+      await wallet.loadMint()
+      const sendOutputs = swap.sendOutputs ?? []
+      const inputStates = await proofStates(wallet, swap.inputs)
+      let refundedProofs: Proof[]
+      if (everyProofUnspent(inputStates)) {
+        const completed = await wallet.completeSwap(swap, arbiterKey.privateKey)
+        if ((completed.keep?.length ?? 0) > 0) {
+          throw new Error('Cashu auction refund unexpectedly returned non-buyer change')
+        }
+        refundedProofs = completed.send
+      } else if (inputStates.length > 0 && inputStates.every(state => state.state === CheckStateEnum.SPENT)) {
+        refundedProofs = await restoreCashuOutputs(wallet, sendOutputs, swap.keysetId)
+      } else if (anyProofPending(inputStates)) {
+        throw new Error('Cashu auction refund is pending at the mint; retry with the same operation id')
+      } else {
+        throw new Error('Cashu auction refund source proofs have inconsistent spend states')
+      }
+      const buyerOutputValue = BigInt(refundArgs.target.buyerOutputValue)
+      if (refundedProofs.length === 0 || proofAmount(refundedProofs) !== buyerOutputValue) {
+        throw new Error('Cashu auction refund did not return the exact recoverable value')
+      }
+      if (!refundedProofs.every(proof => refundProofPolicyMatches(proof, {
+        buyerPubkey: sourceData.participants.buyerPubkey,
+        tradeId: refundArgs.source.tradeId,
+        settlementId: refundArgs.source.settlementId,
+      }))) {
+        throw new Error('Cashu auction refund output policy mismatch')
+      }
+      const refundProof = cashuRefundProof({
+        mintUrl: sourceData.mint,
+        unit: sourceData.unit,
+        amount: cashuProofAmountTemplate(sourceParams, buyerOutputValue),
+        tradeId: refundArgs.source.tradeId,
+        settlementId: refundArgs.source.settlementId,
+        operationId: intent.operationId,
+        buyerPubkey: sourceData.participants.buyerPubkey,
+        sourceMessageHash: refundArgs.messageHash,
+        proofs: refundedProofs,
+      })
+      const externalId = sha256Hex(sortedJson({
+        mint: sourceData.mint,
+        sourceMessageHash: refundArgs.messageHash,
+        proofCommitments: refundedProofs.map(proof => proof.C),
+      }))
+      return {
+        proof: refundProof,
+        receipt: {
+          status: 'completed',
+          operationId: intent.operationId,
+          externalId,
+          evidence: {
+            mint: sourceData.mint,
+            unit: sourceData.unit,
+            refundPercent: 100,
+            sourceValue: sourceData.amount.toString(),
+            inputFee: sourceData.fundingFee.toString(),
+            buyerOutputValue: buyerOutputValue.toString(),
+            sourceMessageHash: refundArgs.messageHash,
+          },
+        },
+        inputs: [{
+          sourceMessageHash: refundArgs.messageHash,
+          sourceValue: sourceData.amount.toString(),
+        }],
+        outputs: [{
+          policyType: cashuRefundPolicyType,
+          buyerPubkey: sourceData.participants.buyerPubkey,
+          amount: buyerOutputValue.toString(),
+        }],
+        data: {
+          method: 'cashu',
+          policyType: cashuRefundPolicyType,
+          refundPercent: 100,
+          sourceValue: sourceData.amount.toString(),
+          inputFee: sourceData.fundingFee.toString(),
+          buyerOutputValue: buyerOutputValue.toString(),
+        },
+      }
     }
 
     async recyclePayment(

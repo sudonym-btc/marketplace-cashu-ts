@@ -59,8 +59,8 @@ const api = marketplace.bind(pool, relays, {
 
 ## Recover payment state
 
-Cashu proofs contain bearer value. The policies require confidential proof
-parameters, and the runtime must seal them before publication. In-flight quotes
+Cashu proofs and prepared settlement packets contain bearer value. The policies
+require whole-proof sealing before publication. In-flight quotes
 resume through the supplied storage implementation; the store retains only
 public recovery metadata and never completed proofs or seeds. Implement atomic
 `create()` in durable stores used by multiple processes.
@@ -70,8 +70,11 @@ intent reuses its quote and deterministically reconstructs mint outputs, which
 also permits NUT-09 restoration after a response is lost. A quote whose creation
 response was lost is marked `reconciliation_required` rather than duplicated.
 
-Auction promotion is supported. Auction refund currently fails closed because
-the protocol does not yet define a safe, idempotent refund transfer.
+Auction promotion and 100% losing-bid refunds are supported. Both are prepared
+and buyer-signed when the bid is funded, then validated and co-signed by the
+arbiter. Refund receipts disclose the source value, Cashu input fee, and exact
+buyer output value. Retrying the same settlement operation restores the same
+buyer output through NUT-09 when the first mint response was lost.
 
 Read the generated [API reference](reference/README.md) for policy options,
 proof storage, seed derivation, validation, and recovery types.

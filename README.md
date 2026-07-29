@@ -19,10 +19,11 @@ The package exports a structural `createCashuEscrowPolicy()` implementation
 that can be passed to `nostr-tools.marketplace.session(pool, relays, signer, { orderPolicies: [...] })`.
 It does not import or know about Nostr events.
 
-The package provides separate order-escrow and auction-bid policies. Auction
-promotion performs a prepared Cashu swap into the order lock. Auction refunds
-are intentionally disabled until the protocol has a safe, idempotent transfer;
-the driver throws instead of reporting a refund that did not move funds.
+The package provides separate order-escrow and auction-bid policies. At bid
+creation the buyer pre-authorizes two exact, mutually exclusive Cashu swaps:
+promotion into the order lock and a 100% losing-bid refund into a buyer-only
+P2PK output. The arbiter validates and co-signs the selected packet. Lost mint
+responses are recovered from the committed outputs through NUT-09.
 
 ## Shape
 
@@ -51,9 +52,9 @@ contains the stable policy hash for marketplace routing, a separate condition
 hash for the concrete buyer/seller/escrow/locktime construction, and
 self-contained params for validation: mint, unit, exact funded `amount`,
 `paymentAmount`, `escrowFee`, participants, locktime, and serialized proofs.
-Cashu proofs are bearer value, so both policies declare their proof parameters
-`confidential`; a compatible runtime must seal them and must never publish the
-clear parameters to a relay.
+Cashu proofs and pre-authorized swap packets contain bearer value, so both
+policies declare the complete proof `secret`; a compatible runtime must seal
+the whole proof and must never publish clear proof fields to a relay.
 
 The validator does not require order or bid context. It resolves the proof
 params, decrypting them through the shared driver `decryptParams` hook when
@@ -70,6 +71,11 @@ derivation index, and public policy metadata. It never stores completed bearer
 proofs, marketplace seeds, private keys, or prepared-output secrets. Durable
 storage implementations should implement atomic `create()` to prevent two
 processes from opening a quote for the same operation.
+
+Auction refunds accept exactly `refundPercent: 100`. The completed receipt
+separately reports the source value, Cashu mint input fee, and buyer output
+value. “100%” means all value recoverable after the explicitly accounted mint
+fee; it is never a silent percentage haircut.
 
 The package expects participant identities to provide Cashu P2PK keys through
 `data.cashuPubkey`, `data.cashuP2pkPubkey`, `data.p2pkPubkey`, or `address`.
