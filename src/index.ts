@@ -17,6 +17,7 @@ export type {
   CashuRecycleArgs,
   CashuEscrowParticipants,
   CashuEscrowPolicyInput,
+  CashuP2pkPolicyType,
   CashuRefundArgs,
   CashuSerializedSwapPreview,
 } from './marketplace/proof.js'
