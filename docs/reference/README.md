@@ -20,17 +20,23 @@
 - [CashuEscrowOperationData](type-aliases/CashuEscrowOperationData.md)
 - [CashuEscrowOperationQuery](type-aliases/CashuEscrowOperationQuery.md)
 - [CashuEscrowOperationStatus](type-aliases/CashuEscrowOperationStatus.md)
+- [CashuEscrowParticipants](type-aliases/CashuEscrowParticipants.md)
 - [CashuEscrowPaymentPolicy](type-aliases/CashuEscrowPaymentPolicy.md)
 - [CashuEscrowPolicy](type-aliases/CashuEscrowPolicy.md)
+- [CashuEscrowPolicyInput](type-aliases/CashuEscrowPolicyInput.md)
 - [CashuEscrowPolicyOptions](type-aliases/CashuEscrowPolicyOptions.md)
 - [CashuEscrowPolicyState](type-aliases/CashuEscrowPolicyState.md)
 - [CashuEscrowStorage](type-aliases/CashuEscrowStorage.md)
 - [CashuMarketplacePolicyOptions](type-aliases/CashuMarketplacePolicyOptions.md)
 - [CashuMintConfig](type-aliases/CashuMintConfig.md)
+- [CashuP2pkPolicyType](type-aliases/CashuP2pkPolicyType.md)
 - [CashuPaymentAmountLimitReason](type-aliases/CashuPaymentAmountLimitReason.md)
 - [CashuPaymentAmountLimits](type-aliases/CashuPaymentAmountLimits.md)
 - [CashuPaymentAsset](type-aliases/CashuPaymentAsset.md)
 - [CashuPaymentPolicy](type-aliases/CashuPaymentPolicy.md)
+- [CashuRecycleArgs](type-aliases/CashuRecycleArgs.md)
+- [CashuRefundArgs](type-aliases/CashuRefundArgs.md)
+- [CashuSerializedSwapPreview](type-aliases/CashuSerializedSwapPreview.md)
 - [GenericAuctionSettlementIntent](type-aliases/GenericAuctionSettlementIntent.md)
 - [GenericAuctionSettlementResult](type-aliases/GenericAuctionSettlementResult.md)
 - [GenericBolt11PaymentRequest](type-aliases/GenericBolt11PaymentRequest.md)
@@ -47,7 +53,15 @@
 - [GenericSwapResumeContext](type-aliases/GenericSwapResumeContext.md)
 - [GenericSwapResumeState](type-aliases/GenericSwapResumeState.md)
 
+## Variables
+
+- [cashuAuctionPolicyType](variables/cashuAuctionPolicyType.md)
+- [cashuEscrowPolicyType](variables/cashuEscrowPolicyType.md)
+- [cashuRefundPolicyType](variables/cashuRefundPolicyType.md)
+
 ## Functions
 
+- [cashuAuctionP2pkOptions](functions/cashuAuctionP2pkOptions.md)
+- [cashuEscrowP2pkOptions](functions/cashuEscrowP2pkOptions.md)
 - [createCashuAuctionPolicy](functions/createCashuAuctionPolicy.md)
 - [createCashuEscrowPolicy](functions/createCashuEscrowPolicy.md)

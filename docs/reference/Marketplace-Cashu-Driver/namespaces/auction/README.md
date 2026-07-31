@@ -32,6 +32,12 @@ Re-exports [CashuAuctionPolicyState](../../../type-aliases/CashuAuctionPolicySta
 
 ***
 
+### cashuAuctionPolicyType
+
+Re-exports [cashuAuctionPolicyType](../../../variables/cashuAuctionPolicyType.md)
+
+***
+
 ### CashuMarketplacePolicyOptions
 
 Re-exports [CashuMarketplacePolicyOptions](../../../type-aliases/CashuMarketplacePolicyOptions.md)
@@ -47,6 +53,30 @@ Re-exports [CashuMintConfig](../../../type-aliases/CashuMintConfig.md)
 ### CashuPaymentAsset
 
 Re-exports [CashuPaymentAsset](../../../type-aliases/CashuPaymentAsset.md)
+
+***
+
+### CashuRecycleArgs
+
+Re-exports [CashuRecycleArgs](../../../type-aliases/CashuRecycleArgs.md)
+
+***
+
+### CashuRefundArgs
+
+Re-exports [CashuRefundArgs](../../../type-aliases/CashuRefundArgs.md)
+
+***
+
+### cashuRefundPolicyType
+
+Re-exports [cashuRefundPolicyType](../../../variables/cashuRefundPolicyType.md)
+
+***
+
+### CashuSerializedSwapPreview
+
+Re-exports [CashuSerializedSwapPreview](../../../type-aliases/CashuSerializedSwapPreview.md)
 
 ***
 
