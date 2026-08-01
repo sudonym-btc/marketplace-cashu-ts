@@ -8,6 +8,10 @@
     "type": "git",
     "url": "git+https://github.com/sudonym-btc/marketplace-cashu-ts.git"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "files": [
     "dist"
   ],
