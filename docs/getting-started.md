@@ -21,30 +21,42 @@ import {
   MemoryCashuEscrowStore,
 } from '@sudonym-btc/marketplace-cashu'
 
+// The operator reads this exact active keyset from /v1/keysets and commits not
+// to inactivate it before activeUntil. Keep prior entries until their bids end.
+const mints = [
+  {
+    mintUrl: 'http://127.0.0.1:19338',
+    unit: 'sat',
+    denomination: 'BTC',
+    decimals: 8,
+    auctionKeysetPolicies: [{
+      keysetId: '<active-keyset-id>',
+      activeUntil: 1_800_000_000,
+    }],
+  },
+]
+
 const cashuPolicy = createCashuEscrowPolicy({
   appId: 'marketplace',
   storage: new MemoryCashuEscrowStore(),
-  mints: [
-    {
-      mintUrl: 'http://127.0.0.1:19338',
-      unit: 'sat',
-      denomination: 'BTC',
-      decimals: 8,
-    },
-  ],
+  mints,
 })
 
 const cashuAuctionPolicy = createCashuAuctionPolicy({
   appId: 'marketplace',
   storage: new MemoryCashuEscrowStore(),
-  mints: cashuPolicy.assets().map(asset => ({
-    mintUrl: asset.data.mintUrl as string,
-    unit: asset.data.unit as string,
-    denomination: asset.denomination,
-    decimals: asset.decimals,
-  })),
+  mints,
 })
 ```
+
+The driver requires every mint to advertise NUT-11. Auction funding and
+settlement additionally require advertised NUT-09 plus the exact
+`auctionKeysetPolicies` entry shown above. Cashu NUT-02 does not expose a future
+inactivation time. Its optional `final_expiry` is only a final redemption
+deadline, so the driver never interprets `final_expiry: null` as an active
+lifetime guarantee. Funding fails before quote creation when any requirement is
+missing, the keyset is inactive, or `activeUntil` is earlier than the bid
+locktime.
 
 ## Add the driver to a marketplace runtime
 
@@ -75,6 +87,12 @@ and buyer-signed when the bid is funded, then validated and co-signed by the
 arbiter. Refund receipts disclose the source value, Cashu input fee, and exact
 buyer output value. Retrying the same settlement operation restores the same
 buyer output through NUT-09 when the first mint response was lost.
+
+Run `npm run test:integration` against an explicitly configured local regtest
+mint to exercise a real Lightning-funded bid, real NUT-11 swap enforcement, a
+simulated lost accepted response, and real NUT-09 restoration. The command
+requires `CASHU_TEST_MINT_URL` and a unique deterministic `CASHU_TEST_RUN_ID`;
+`CASHU_TEST_PAYER_CONTAINER` defaults to the NMDK local stack's buyer LND.
 
 Read the generated [API reference](reference/README.md) for policy options,
 proof storage, seed derivation, validation, and recovery types.

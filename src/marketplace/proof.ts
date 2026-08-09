@@ -56,6 +56,10 @@ export type CashuRecycleArgs = {
     tradeId: string
     settlementId: string
     policyType: typeof cashuAuctionPolicyType
+    mint: string
+    unit: string
+    outputKeysetId: string
+    outputKeysetActiveUntil: number
   }
   message: string
   messageHash: string
@@ -88,6 +92,7 @@ export type CashuRefundArgs = {
     sourceValue: string
     inputFee: string
     keysetId: string
+    keysetActiveUntil: number
   }
   target: {
     policyType: typeof cashuRefundPolicyType

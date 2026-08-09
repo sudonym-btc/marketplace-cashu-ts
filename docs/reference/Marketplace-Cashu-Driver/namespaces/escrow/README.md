@@ -8,6 +8,12 @@ Re-exports [CashuAmount](../../../type-aliases/CashuAmount.md)
 
 ***
 
+### CashuAuctionKeysetPolicy
+
+Re-exports [CashuAuctionKeysetPolicy](../../../type-aliases/CashuAuctionKeysetPolicy.md)
+
+***
+
 ### CashuEscrowPaymentPolicy
 
 Re-exports [CashuEscrowPaymentPolicy](../../../type-aliases/CashuEscrowPaymentPolicy.md)

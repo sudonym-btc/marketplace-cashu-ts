@@ -30,6 +30,16 @@ export type CashuAmount = {
   decimals: number
 }
 
+/**
+ * Operator commitment that a mint output keyset will remain active through a
+ * Unix timestamp. NUT-02 does not advertise a future inactivation time, so an
+ * auction must not infer this guarantee from `active` or `final_expiry`.
+ */
+export type CashuAuctionKeysetPolicy = {
+  keysetId: string
+  activeUntil: number
+}
+
 export type CashuMintConfig = {
   mintUrl: string
   unit: string
@@ -37,6 +47,8 @@ export type CashuMintConfig = {
   decimals: number
   policyHash?: string
   maxOrderAmount?: string
+  /** Required for auction funding; retain old entries until every bid expires. */
+  auctionKeysetPolicies?: CashuAuctionKeysetPolicy[]
   data?: Record<string, unknown>
 }
 

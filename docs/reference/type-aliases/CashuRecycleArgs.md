@@ -38,6 +38,18 @@
 
 > **source**: `object`
 
+#### mint
+
+> **mint**: `string`
+
+#### outputKeysetActiveUntil
+
+> **outputKeysetActiveUntil**: `number`
+
+#### outputKeysetId
+
+> **outputKeysetId**: `string`
+
 #### policyType
 
 > **policyType**: *typeof* [`cashuAuctionPolicyType`](../variables/cashuAuctionPolicyType.md)
@@ -49,6 +61,10 @@
 #### tradeId
 
 > **tradeId**: `string`
+
+#### unit
+
+> **unit**: `string`
 
 ***
 

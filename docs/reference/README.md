@@ -8,14 +8,17 @@
 ## Classes
 
 - [CashuPaymentAmountLimitError](classes/CashuPaymentAmountLimitError.md)
+- [MemoryCashuEscrowStore](classes/MemoryCashuEscrowStore.md)
 
 ## Type Aliases
 
 - [CashuAmount](type-aliases/CashuAmount.md)
+- [CashuAuctionKeysetPolicy](type-aliases/CashuAuctionKeysetPolicy.md)
 - [CashuAuctionPaymentPolicy](type-aliases/CashuAuctionPaymentPolicy.md)
 - [CashuAuctionPolicy](type-aliases/CashuAuctionPolicy.md)
 - [CashuAuctionPolicyOptions](type-aliases/CashuAuctionPolicyOptions.md)
 - [CashuAuctionPolicyState](type-aliases/CashuAuctionPolicyState.md)
+- [CashuDerivedKey](type-aliases/CashuDerivedKey.md)
 - [CashuEscrowOperation](type-aliases/CashuEscrowOperation.md)
 - [CashuEscrowOperationData](type-aliases/CashuEscrowOperationData.md)
 - [CashuEscrowOperationQuery](type-aliases/CashuEscrowOperationQuery.md)
@@ -58,10 +61,13 @@
 - [cashuAuctionPolicyType](variables/cashuAuctionPolicyType.md)
 - [cashuEscrowPolicyType](variables/cashuEscrowPolicyType.md)
 - [cashuRefundPolicyType](variables/cashuRefundPolicyType.md)
+- [maxCashuDerivationIndex](variables/maxCashuDerivationIndex.md)
 
 ## Functions
 
+- [canonicalCashuAssetId](functions/canonicalCashuAssetId.md)
 - [cashuAuctionP2pkOptions](functions/cashuAuctionP2pkOptions.md)
 - [cashuEscrowP2pkOptions](functions/cashuEscrowP2pkOptions.md)
 - [createCashuAuctionPolicy](functions/createCashuAuctionPolicy.md)
 - [createCashuEscrowPolicy](functions/createCashuEscrowPolicy.md)
+- [deriveCashuEscrowKey](functions/deriveCashuEscrowKey.md)

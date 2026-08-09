@@ -42,6 +42,10 @@
 
 > **inputFee**: `string`
 
+#### keysetActiveUntil
+
+> **keysetActiveUntil**: `number`
+
 #### keysetId
 
 > **keysetId**: `string`

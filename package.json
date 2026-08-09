@@ -39,7 +39,8 @@
     "docs": "npm run docs:api",
     "docs:api": "typedoc --plugin typedoc-plugin-markdown --tsconfig tsconfig.json --name \"Marketplace Cashu Driver\" --out docs/reference --readme none --githubPages false --hideBreadcrumbs true --hidePageHeader true --disableSources src/index.ts",
     "prepack": "npm run build",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:integration": "npm run build && node --test test/integration/*.test.mjs"
   },
   "dependencies": {
     "@sudonym-btc/marketplace-driver-interface": "0.1.0",

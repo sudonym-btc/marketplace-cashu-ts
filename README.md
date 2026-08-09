@@ -16,7 +16,7 @@ npm run docs:api
 ```
 
 The package exports a structural `createCashuEscrowPolicy()` implementation
-that can be passed to `nostr-tools.marketplace.session(pool, relays, signer, { orderPolicies: [...] })`.
+that can be passed to `nostr-tools.marketplace.bind(pool, relays, { orderDrivers: [...] })`.
 It does not import or know about Nostr events.
 
 The package provides separate order-escrow and auction-bid policies. At bid
@@ -24,6 +24,30 @@ creation the buyer pre-authorizes two exact, mutually exclusive Cashu swaps:
 promotion into the order lock and a 100% losing-bid refund into a buyer-only
 P2PK output. The arbiter validates and co-signs the selected packet. Lost mint
 responses are recovered from the committed outputs through NUT-09.
+
+All configured mints must advertise NUT-11 before this package will fund,
+validate, sweep, or settle a P2PK escrow. Auction mints must also advertise
+NUT-09. These checks fail closed; a structured `P2PK` secret on a legacy mint
+is not an escrow because the mint can otherwise treat it as ordinary bearer
+value.
+
+Cashu does not standardize a future keyset-inactivation schedule. Auction
+configuration must therefore include exactly one operator commitment for the
+active output keyset:
+
+```ts
+auctionKeysetPolicies: [{
+  keysetId: '<active-keyset-id-from-/v1/keysets>',
+  activeUntil: 1_800_000_000, // Unix seconds; at least the latest bid locktime
+}]
+```
+
+The driver verifies the keyset is currently active, binds its ID and committed
+horizon into the buyer-signed refund and promotion packets, and rechecks both
+before settlement. Retain old policy entries until all bids using them expire.
+NUT-02 `final_expiry` is only a final redemption deadline; it is not treated as
+an active-through guarantee. A null `final_expiry` is valid but does not remove
+the explicit operator-policy requirement.
 
 ## Shape
 

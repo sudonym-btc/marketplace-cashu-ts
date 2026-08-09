@@ -38,6 +38,10 @@ const mint = {
   unit: 'sat',
   denomination: 'SAT',
   decimals: 0,
+  auctionKeysetPolicies: [{
+    keysetId: '009a1f293253e41e',
+    activeUntil: 1_900_000_000,
+  }],
 }
 
 // Generator point: the public key for mock mint scalar 1. Returning B_ as C_
@@ -57,7 +61,8 @@ function p2pkSecretFromOptions(options) {
   return createP2PKsecret(lockKeys[0], tags)
 }
 
-function createMockWallet() {
+function createMockWallet(options = {}) {
+  const supportedNuts = new Set(options.supportedNuts ?? [9, 11])
   const calls = {
     quoteAmounts: [],
     descriptions: [],
@@ -90,9 +95,15 @@ function createMockWallet() {
     defaultOutputType() {
       return { type: 'random' }
     },
-    getKeyset() {
+    getKeyset(keysetId) {
+      if (keysetId && keysetId !== '009a1f293253e41e') {
+        throw new Error(`Unknown mock keyset: ${keysetId}`)
+      }
       return {
         id: '009a1f293253e41e',
+        unit: mint.unit,
+        isActive: options.keysetActive ?? true,
+        ...(options.keysetFinalExpiry === undefined ? {} : { expiry: options.keysetFinalExpiry }),
         keys: {
           1: mockMintPublicKey,
           2: mockMintPublicKey,
@@ -127,7 +138,7 @@ function createMockWallet() {
               }],
             }
           }
-          return { supported: false }
+          return { supported: supportedNuts.has(num) }
         },
       }
     },
@@ -914,7 +925,7 @@ test('rejects Cashu payments outside advertised mint limits before quote creatio
           }],
         }
       }
-      return { supported: false }
+      return { supported: num === 11 }
     },
   })
   const policy = createCashuEscrowPolicy({
@@ -1099,6 +1110,8 @@ test('creates an auction bid proof with the same Cashu payment shape', async () 
   assert.equal(proof.params.recycleArgs.type, 'cashu:p2pk-auction-promote-v1')
   assert.equal(proof.params.recycleArgs.signerPubkey, buyer.publicKey)
   assert.equal(proof.params.recycleArgs.source.settlementId, intent.settlementId)
+  assert.equal(proof.params.recycleArgs.source.outputKeysetId, mint.auctionKeysetPolicies[0].keysetId)
+  assert.equal(proof.params.recycleArgs.source.outputKeysetActiveUntil, mint.auctionKeysetPolicies[0].activeUntil)
   assert.equal(proof.params.recycleArgs.target.settlementId, intent.metadata.targetOrderGroupId)
   assert.equal(proof.params.recycleArgs.target.policyType, cashuEscrowPolicyType)
   assert.equal(proof.params.recycleArgs.target.conditionHash, cashuEscrowPolicyHash({
@@ -1196,6 +1209,75 @@ test('creates an auction bid proof with the same Cashu payment shape', async () 
   assert.equal(operation?.status, 'completed')
 })
 
+test('fails closed before funding when required Cashu NUT capabilities are absent', async () => {
+  const cases = [
+    { supportedNuts: [9], pattern: /NUT-11/ },
+    { supportedNuts: [11], pattern: /NUT-09/ },
+  ]
+  for (const [index, entry] of cases.entries()) {
+    const { wallet, calls } = createMockWallet({ supportedNuts: entry.supportedNuts })
+    const policy = createCashuAuctionPolicy({
+      mints: [mint],
+      storage: new MemoryCashuEscrowStore(),
+      walletFactory: () => wallet,
+      quotePollIntervalMs: 0,
+      quotePaymentTimeoutMs: 1_000,
+    })
+    await assert.rejects(async () => {
+      for await (const state of policy.pay(createAuctionIntent(policy, {
+        settlementId: String(index + 1).repeat(64),
+        accountIndex: 40 + index,
+      }))) void state
+    }, entry.pattern)
+    assert.deepEqual(calls.quoteAmounts, [])
+  }
+})
+
+test('requires an active exact-keyset operator horizon through auction locktime', async () => {
+  const cases = [
+    {
+      mintConfig: { ...mint, auctionKeysetPolicies: [] },
+      walletOptions: {},
+      pattern: /explicit operator active-until policy/,
+    },
+    {
+      mintConfig: {
+        ...mint,
+        auctionKeysetPolicies: [{ keysetId: '009a1f293253e41e', activeUntil: 1_799_999_999 }],
+      },
+      walletOptions: {},
+      pattern: /not committed active through/,
+    },
+    {
+      mintConfig: mint,
+      walletOptions: { keysetActive: false },
+      pattern: /is not active/,
+    },
+    {
+      mintConfig: mint,
+      walletOptions: { keysetFinalExpiry: 1_899_999_999 },
+      pattern: /expires before its active-until policy/,
+    },
+  ]
+  for (const [index, entry] of cases.entries()) {
+    const { wallet, calls } = createMockWallet(entry.walletOptions)
+    const policy = createCashuAuctionPolicy({
+      mints: [entry.mintConfig],
+      storage: new MemoryCashuEscrowStore(),
+      walletFactory: () => wallet,
+      quotePollIntervalMs: 0,
+      quotePaymentTimeoutMs: 1_000,
+    })
+    await assert.rejects(async () => {
+      for await (const state of policy.pay(createAuctionIntent(policy, {
+        settlementId: String(index + 5).repeat(64),
+        accountIndex: 50 + index,
+      }))) void state
+    }, entry.pattern)
+    assert.deepEqual(calls.quoteAmounts, [])
+  }
+})
+
 test('executes and idempotently restores a buyer-only Cashu auction refund', async () => {
   const store = new MemoryCashuEscrowStore()
   const { wallet, calls } = createMockWallet()
@@ -1258,6 +1340,54 @@ test('executes and idempotently restores a buyer-only Cashu auction refund', asy
     ...refundIntent,
     refundPercent: 99,
   }), /refundPercent=100/)
+})
+
+test('rechecks NUT-09 and the committed output keyset immediately before refund', async () => {
+  const { wallet, calls } = createMockWallet()
+  wallet.getFeesForKeyset = () => Amount.from(1)
+  const prepareSwap = wallet.prepareSwapToSend.bind(wallet)
+  wallet.prepareSwapToSend = async (...args) => ({
+    ...(await prepareSwap(...args)),
+    fees: Amount.from(1),
+  })
+  const policy = createCashuAuctionPolicy({
+    mints: [mint],
+    storage: new MemoryCashuEscrowStore(),
+    walletFactory: () => wallet,
+    quotePollIntervalMs: 0,
+    quotePaymentTimeoutMs: 1_000,
+  })
+  const intent = createAuctionIntent(policy, {
+    tradeId: 'auction-settlement-capability-recheck',
+    settlementId: '4'.repeat(64),
+    accountIndex: 44,
+  })
+  const states = []
+  for await (const state of policy.pay(intent)) states.push(state)
+  const refundIntent = {
+    purpose: 'bid',
+    action: 'auction_refund',
+    operationId: 'cashu-refund-capability-recheck',
+    seed: 'a'.repeat(64),
+    refundPercent: 100,
+    proof: states.at(-1).proof,
+  }
+
+  const originalMintInfo = wallet.getMintInfo.bind(wallet)
+  wallet.getMintInfo = () => ({
+    isSupported(num) {
+      if (num === 4) return originalMintInfo().isSupported(4)
+      return { supported: num === 11 }
+    },
+  })
+  await assert.rejects(policy.refundPayment(refundIntent), /NUT-09/)
+  assert.equal(calls.completedSwapCount, 0)
+
+  wallet.getMintInfo = originalMintInfo
+  const originalGetKeyset = wallet.getKeyset.bind(wallet)
+  wallet.getKeyset = keysetId => ({ ...originalGetKeyset(keysetId), isActive: false })
+  await assert.rejects(policy.refundPayment(refundIntent), /is not active/)
+  assert.equal(calls.completedSwapCount, 0)
 })
 
 test('recovers an accepted Cashu refund after the mint response is lost', async () => {

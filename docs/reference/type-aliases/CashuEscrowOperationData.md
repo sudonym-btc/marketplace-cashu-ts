@@ -64,6 +64,14 @@ from the caller-provided marketplace seed and request fingerprint.
 
 ***
 
+### mintKeysetActiveUntil?
+
+> `optional` **mintKeysetActiveUntil?**: `number`
+
+Operator-attested active horizon for an auction output keyset (Unix seconds).
+
+***
+
 ### mintKeysetId?
 
 > `optional` **mintKeysetId?**: `string`

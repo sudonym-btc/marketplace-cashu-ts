@@ -15,6 +15,7 @@ export type {
 } from '../marketplace/escrowPolicy.js'
 export type {
   CashuAmount,
+  CashuAuctionKeysetPolicy,
   CashuAuctionPaymentPolicy,
   CashuAuctionPolicy,
   CashuAuctionPolicyState,

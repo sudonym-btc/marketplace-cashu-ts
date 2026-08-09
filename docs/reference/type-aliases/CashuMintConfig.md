@@ -4,6 +4,14 @@
 
 ## Properties
 
+### auctionKeysetPolicies?
+
+> `optional` **auctionKeysetPolicies?**: [`CashuAuctionKeysetPolicy`](CashuAuctionKeysetPolicy.md)[]
+
+Required for auction funding; retain old entries until every bid expires.
+
+***
+
 ### data?
 
 > `optional` **data?**: `Record`\<`string`, `unknown`\>

@@ -22,6 +22,7 @@ export type {
 } from './escrowPolicy.js'
 export type {
   CashuAuctionPaymentPolicy,
+  CashuAuctionKeysetPolicy,
   CashuAuctionPolicy,
   CashuAuctionPolicyState,
   CashuAmount,

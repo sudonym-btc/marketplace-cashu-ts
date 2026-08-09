@@ -33,6 +33,8 @@ export type CashuEscrowOperationData = {
   description: string
   quoteExpiry?: number | null
   mintKeysetId?: string
+  /** Operator-attested active horizon for an auction output keyset (Unix seconds). */
+  mintKeysetActiveUntil?: number
   recycleFeeReserve?: string
 }
 

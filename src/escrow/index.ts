@@ -6,6 +6,7 @@ export type {
 } from '../marketplace/escrowPolicy.js'
 export type {
   CashuAmount,
+  CashuAuctionKeysetPolicy,
   CashuEscrowPaymentPolicy,
   CashuEscrowPolicy,
   CashuEscrowPolicyState,

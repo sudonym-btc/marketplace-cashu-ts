@@ -12,7 +12,11 @@ export {
   cashuEscrowPolicyType,
   cashuEscrowP2pkOptions,
   cashuRefundPolicyType,
+  canonicalCashuAssetId,
 } from './marketplace/proof.js'
+export { deriveCashuEscrowKey, maxCashuDerivationIndex } from './seed.js'
+export type { CashuDerivedKey } from './seed.js'
+export { MemoryCashuEscrowStore } from './storage.js'
 export type {
   CashuRecycleArgs,
   CashuEscrowParticipants,
@@ -30,6 +34,7 @@ export type {
 } from './marketplace/escrowPolicy.js'
 export type {
   CashuAuctionPaymentPolicy,
+  CashuAuctionKeysetPolicy,
   CashuAuctionPolicy,
   CashuAuctionPolicyState,
   CashuAmount,
