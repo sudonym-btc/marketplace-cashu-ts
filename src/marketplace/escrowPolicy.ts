@@ -809,6 +809,11 @@ async function waitForPaidQuote(
     throw error
   } finally {
     abortController.abort()
+    try {
+      wallet.mint.disconnectWebSocket()
+    } catch {
+      // Quote state is already reconciled; socket cleanup must not change the result.
+    }
   }
 }
 

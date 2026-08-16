@@ -80,6 +80,7 @@ function createMockWallet(options = {}) {
     completedMintCount: 0,
     completedSwapCount: 0,
     restoredMintCount: 0,
+    websocketDisconnects: 0,
   }
   const mockOutput = (amount, p2pkOptions) => ({
     blindedMessage: {
@@ -228,6 +229,9 @@ function createMockWallet(options = {}) {
       }))
     },
     mint: {
+      disconnectWebSocket() {
+        calls.websocketDisconnects += 1
+      },
       async restore({ outputs }) {
         calls.restoredMintCount += 1
         return {
@@ -743,6 +747,7 @@ test('waits for Cashu mint quote payment over websocket before slow polling', as
   assert.equal(calls.onceMintPaid[0].timeoutMs <= 1_000, true)
   assert.equal(calls.onceMintPaid[0].timeoutMs > 0, true)
   assert.deepEqual(calls.checkedQuotes, [])
+  assert.equal(calls.websocketDisconnects, 1)
 })
 
 test('falls back to slow polling when Cashu mint quote websocket wait fails', async () => {
@@ -778,6 +783,7 @@ test('falls back to slow polling when Cashu mint quote websocket wait fails', as
   assert.equal(calls.onceMintPaid.length, 1)
   assert.equal(calls.onceMintPaid[0].id, 'quote-1')
   assert.deepEqual(calls.checkedQuotes, ['quote-1'])
+  assert.equal(calls.websocketDisconnects, 1)
 })
 
 test('reuses a persisted quote and reconciles it during startup', async () => {
