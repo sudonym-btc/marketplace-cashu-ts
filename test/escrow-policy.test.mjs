@@ -535,6 +535,31 @@ test('creates an escrow payment proof and validates unspent locked proofs', asyn
   assert.equal(btcValidation.assetMatched, true)
   assert.equal(btcValidation.arbiterMatched, true)
 
+  const mismatchedAmount = await policy.validatePayment({
+    driver: cashuEscrowPolicyType,
+    proof,
+    expected: {
+      settlementId: intent.settlementId,
+      tradeId: intent.tradeId,
+      amount: { ...intent.amount, value: '11' },
+    },
+  })
+  assert.equal(mismatchedAmount.status, 'invalid')
+  assert.equal(mismatchedAmount.amountMatched, false)
+  assert.match(mismatchedAmount.error, /expected amount/)
+
+  const mismatchedSettlement = await policy.validatePayment({
+    driver: cashuEscrowPolicyType,
+    proof,
+    expected: {
+      settlementId: 'another-settlement',
+      tradeId: intent.tradeId,
+      amount: intent.amount,
+    },
+  })
+  assert.equal(mismatchedSettlement.status, 'invalid')
+  assert.match(mismatchedSettlement.error, /settlement id/)
+
   const clearParams = proof.params
   const encryptedValidation = await policy.validatePayment({
     driver: cashuEscrowPolicyType,

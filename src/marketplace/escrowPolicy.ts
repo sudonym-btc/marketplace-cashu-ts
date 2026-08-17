@@ -431,6 +431,87 @@ function compatibleDenomination(expected: string | undefined, actual: unknown): 
   return (left === 'BTC' && right === 'SAT') || (left === 'SAT' && right === 'BTC')
 }
 
+function currencyDecimals(denominationValue: unknown, decimals: number): number {
+  const unit = denomination(denominationValue)
+  return currency(unit) === 'BTC' && (unit === 'SAT' || unit === 'SATS')
+    ? decimals + 8
+    : decimals
+}
+
+function scaleExact(value: bigint, fromDecimals: number, toDecimals: number): bigint | undefined {
+  if (fromDecimals === toDecimals) return value
+  if (fromDecimals < toDecimals) return value * 10n ** BigInt(toDecimals - fromDecimals)
+  const factor = 10n ** BigInt(fromDecimals - toDecimals)
+  return value % factor === 0n ? value / factor : undefined
+}
+
+function expectedAmountMatches(
+  actualValue: bigint,
+  actualDenomination: string,
+  actualDecimals: number,
+  expected: { value: string; currency?: string; denomination: string; decimals: number },
+): boolean {
+  if (!/^\d+$/.test(expected.value)) return false
+  const actualCurrency = currency(actualDenomination)
+  const expectedCurrency = currency(expected.currency ?? expected.denomination)
+  if (actualCurrency !== expectedCurrency) return false
+  const scaled = scaleExact(
+    actualValue,
+    currencyDecimals(actualDenomination, actualDecimals),
+    currencyDecimals(expected.denomination, expected.decimals),
+  )
+  return scaled === BigInt(expected.value)
+}
+
+function validateCashuExpectedEvidence(
+  request: GenericPaymentValidationRequest,
+  params: Record<string, unknown>,
+  data: ReturnType<typeof mintedProofsData>,
+): string | undefined {
+  const expected = request.expected
+  if (!expected) return undefined
+  if (expected.settlementId && expected.settlementId !== params.settlementId) {
+    return 'Cashu settlement id does not match expected payment'
+  }
+  if (expected.tradeId && expected.tradeId !== params.tradeId) {
+    return 'Cashu trade id does not match expected payment'
+  }
+  const actualDenomination = typeof params.denomination === 'string' ? params.denomination : data.unit
+  const actualDecimals = typeof params.decimals === 'number' ? params.decimals : 0
+  if (expected.amount && !expectedAmountMatches(
+    data.paymentAmount,
+    actualDenomination,
+    actualDecimals,
+    expected.amount,
+  )) {
+    return 'Cashu payment amount does not match expected amount'
+  }
+  if (expected.fee && !expectedAmountMatches(
+    data.escrowFee,
+    actualDenomination,
+    actualDecimals,
+    expected.fee,
+  )) {
+    return 'Cashu escrow fee does not match expected fee'
+  }
+  if (expected.asset?.currency && currency(expected.asset.currency) !== currency(actualDenomination)) {
+    return 'Cashu asset currency does not match expected asset'
+  }
+  if (expected.asset?.denomination &&
+      currency(expected.asset.denomination) !== currency(actualDenomination)) {
+    return 'Cashu asset denomination does not match expected asset'
+  }
+  if (expected.asset?.decimals !== undefined &&
+      currencyDecimals(expected.asset.denomination ?? actualDenomination, expected.asset.decimals) !==
+        currencyDecimals(actualDenomination, actualDecimals)) {
+    return 'Cashu asset decimals do not match expected asset'
+  }
+  if (expected.asset?.assetId && expected.asset.assetId !== canonicalCashuAssetId(data.mint, data.unit)) {
+    return 'Cashu asset id does not match expected asset'
+  }
+  return undefined
+}
+
 function identityCashuPubkey(identity: GenericPaymentIdentity | undefined, label: string): string {
   const data = identity?.data ?? {}
   const value =
@@ -2090,6 +2171,8 @@ function createCashuPolicy<
         const termsError = validateCashuPaymentTerms(request.proof, params, spec.id)
         if (termsError) return { driver: 'cashu', status: 'invalid', error: termsError }
         const data = mintedProofsData(params)
+        const expectedError = validateCashuExpectedEvidence(request, params, data)
+        if (expectedError) return { driver: 'cashu', status: 'invalid', amountMatched: false, error: expectedError }
         const locktime = Number(params.locktime)
         const expectedAmount = data.amount
         const proofs = proofsFromPaymentProofParams(params)
