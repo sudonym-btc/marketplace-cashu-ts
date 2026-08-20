@@ -1543,7 +1543,9 @@ function createCashuPolicy<
     }
 
     async discoverHighWatermark(context: CashuPolicyWatermarkContext) {
-      if (context.highWaterMark < 0 || context.highWaterMark >= maxCashuDerivationIndex) {
+      if (!Number.isSafeInteger(context.highWaterMark) ||
+          context.highWaterMark < -1 ||
+          context.highWaterMark >= maxCashuDerivationIndex) {
         throw new Error(`Cashu high-water mark must leave a valid uint32 index: ${context.highWaterMark}`)
       }
       return {

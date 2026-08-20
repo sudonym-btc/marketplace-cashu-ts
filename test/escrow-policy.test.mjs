@@ -16,6 +16,7 @@ import {
   CashuPaymentAmountLimitError,
   createCashuAuctionPolicy,
   createCashuEscrowPolicy,
+  maxCashuDerivationIndex,
 } from '../dist/index.js'
 import { MemoryCashuEscrowStore } from '../dist/storage.js'
 import { deriveCashuEscrowKey } from '../dist/seed.js'
@@ -387,6 +388,33 @@ function mutateFirstCashuProof(paymentProof, mutate) {
     },
   }
 }
+
+test('accepts the cold-start watermark sentinel and preserves uint32 bounds', async () => {
+  const policies = [
+    createCashuEscrowPolicy({ mints: [mint], storage: new MemoryCashuEscrowStore() }),
+    createCashuAuctionPolicy({ mints: [mint], storage: new MemoryCashuEscrowStore() }),
+  ]
+  for (const policy of policies) {
+    const discovery = await policy.discoverHighWatermark({
+      seed: '1'.repeat(64),
+      highWaterMark: -1,
+      unusedWindow: 20,
+    })
+    assert.equal(discovery.maxUsedIndex, -1)
+    assert.equal(discovery.nextUnusedIndex, 0)
+    assert.equal(discovery.scannedFrom, 0)
+    assert.equal(discovery.scannedThrough, -1)
+    assert.deepEqual(discovery.usedIndexes, [])
+
+    for (const invalid of [-2, 0.5, Number.NaN, maxCashuDerivationIndex]) {
+      await assert.rejects(policy.discoverHighWatermark({
+        seed: '1'.repeat(64),
+        highWaterMark: invalid,
+        unusedWindow: 20,
+      }), /must leave a valid uint32 index/)
+    }
+  }
+})
 
 test('derives stable Cashu escrow keys from seed and index', () => {
   const seed = '1'.repeat(64)
