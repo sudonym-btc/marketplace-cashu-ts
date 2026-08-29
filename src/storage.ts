@@ -1,5 +1,6 @@
 export type CashuEscrowOperationStatus =
   | 'quote_created'
+  | 'quote_requesting'
   | 'payment_required'
   | 'minting'
   | 'paid'
@@ -31,11 +32,33 @@ export type CashuEscrowOperationData = {
   denomination: string
   decimals: number
   description: string
+  /**
+   * Versioned marker proving `quote_created` was persisted before any mint
+   * quote request was attempted. Records without this marker predate the
+   * exactly-once claim protocol and must not be retried automatically.
+   */
+  quoteCreationVersion?: 1
   quoteExpiry?: number | null
   mintKeysetId?: string
   /** Operator-attested active horizon for an auction output keyset (Unix seconds). */
   mintKeysetActiveUntil?: number
   recycleFeeReserve?: string
+}
+
+/**
+ * Short-lived ownership metadata for the one non-idempotent mint-quote call.
+ *
+ * A `reserved` claim may be replaced after expiry because the durable status
+ * still proves that no request has started. A `requesting` claim is the
+ * irreversible point of no return and must never be stolen or retried.
+ */
+export type CashuEscrowOperationClaim = {
+  version: 1
+  purpose: 'mint_quote'
+  phase: 'reserved' | 'requesting'
+  owner: string
+  /** Unix epoch milliseconds. */
+  expiresAt: number
 }
 
 export type CashuEscrowOperation = {
@@ -50,6 +73,9 @@ export type CashuEscrowOperation = {
   quoteId?: string
   request?: string
   error?: string
+  /** Monotonic revision used by compareAndSet(). Legacy records imply zero. */
+  revision?: number
+  claim?: CashuEscrowOperationClaim
   data: CashuEscrowOperationData
   createdAt: number
   updatedAt: number
@@ -67,6 +93,20 @@ export type CashuEscrowStorage = {
   get(id: string): Promise<CashuEscrowOperation | null>
   /** Atomically insert a new operation, returning false when the id exists. */
   create?(record: CashuEscrowOperation): Promise<boolean>
+  /**
+   * Atomically replace an operation only when its current revision equals
+   * `expectedRevision`. The replacement revision must be
+   * `expectedRevision + 1`.
+   *
+   * Durable stores shared by more than one policy instance or process MUST
+   * implement this primitive. It lets a caller take a pre-request lease while
+   * ensuring only one caller can cross the quote-request point of no return.
+   */
+  compareAndSet?(
+    id: string,
+    expectedRevision: number,
+    replacement: CashuEscrowOperation,
+  ): Promise<boolean>
   put(record: CashuEscrowOperation): Promise<void>
   list(query?: CashuEscrowOperationQuery): Promise<CashuEscrowOperation[]>
   delete(id: string): Promise<void>
@@ -91,6 +131,20 @@ export class MemoryCashuEscrowStore implements CashuEscrowStorage {
   async create(record: CashuEscrowOperation): Promise<boolean> {
     if (this.records.has(record.id)) return false
     this.records.set(record.id, structuredClone(record))
+    return true
+  }
+
+  async compareAndSet(
+    id: string,
+    expectedRevision: number,
+    replacement: CashuEscrowOperation,
+  ): Promise<boolean> {
+    const current = this.records.get(id)
+    if (!current || (current.revision ?? 0) !== expectedRevision) return false
+    if (replacement.id !== id || replacement.revision !== expectedRevision + 1) {
+      throw new Error('Cashu compareAndSet replacement must increment the matching operation revision')
+    }
+    this.records.set(id, structuredClone(replacement))
     return true
   }
 

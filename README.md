@@ -92,9 +92,18 @@ recovery state. Retrying the same `pay(intent)` resumes the recorded quote and
 uses deterministic P2PK outputs to recover a mint response lost after issuance.
 The operation store contains an allowlisted request fingerprint, quote ID,
 derivation index, and public policy metadata. It never stores completed bearer
-proofs, marketplace seeds, private keys, or prepared-output secrets. Durable
-storage implementations should implement atomic `create()` to prevent two
-processes from opening a quote for the same operation.
+proofs, marketplace seeds, private keys, or prepared-output secrets.
+
+Durable storage must implement atomic `create()` and must implement the
+revision-based `compareAndSet()` contract when more than one policy instance,
+browser tab, or process can handle an operation. The driver takes a short
+pre-request lease, then durably changes `quote_created` to `quote_requesting`
+before calling the mint. An expired pre-request lease can be claimed safely;
+an interrupted `quote_requesting` record is never retried because the mint may
+already have created a quote. It is instead surfaced as
+`reconciliation_required`. This keeps the stored claim to a random public owner
+token, phase, expiry, and revision while preventing duplicate quote side
+effects.
 
 Auction refunds accept exactly `refundPercent: 100`. The completed receipt
 separately reports the source value, Cashu mint input fee, and buyer output

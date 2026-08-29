@@ -757,7 +757,7 @@ test('sweeps unspent Cashu proofs to a withdrawal invoice', async () => {
 
 test('waits for Cashu mint quote payment over websocket before slow polling', async () => {
   const store = new MemoryCashuEscrowStore()
-  const { wallet, calls } = createMockWallet()
+  const { wallet, calls } = createMockWallet({ supportedNuts: [9, 11, 17] })
   wallet.on = {
     async onceMintPaid(id, options) {
       calls.onceMintPaid.push({
@@ -805,7 +805,7 @@ test('waits for Cashu mint quote payment over websocket before slow polling', as
 
 test('falls back to slow polling when Cashu mint quote websocket wait fails', async () => {
   const store = new MemoryCashuEscrowStore()
-  const { wallet, calls } = createMockWallet()
+  const { wallet, calls } = createMockWallet({ supportedNuts: [9, 11, 17] })
   wallet.on = {
     async onceMintPaid(id, options) {
       calls.onceMintPaid.push({
@@ -837,6 +837,36 @@ test('falls back to slow polling when Cashu mint quote websocket wait fails', as
   assert.equal(calls.onceMintPaid[0].id, 'quote-1')
   assert.deepEqual(calls.checkedQuotes, ['quote-1'])
   assert.equal(calls.websocketDisconnects, 1)
+})
+
+test('skips websocket quote waiting when the mint does not advertise NUT-17', async () => {
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  wallet.on = {
+    async onceMintPaid() {
+      throw new Error('websocket must not be attempted without NUT-17')
+    },
+  }
+  const policy = createCashuEscrowPolicy({
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    quotePollIntervalMs: 0,
+    quotePaymentTimeoutMs: 1_000,
+    now: () => 1_777_000_000_000,
+  })
+
+  const states = []
+  for await (const state of policy.pay(createEscrowIntent(policy, {
+    tradeId: 'trade-poll-no-nut17',
+    settlementId: 'order-poll-no-nut17',
+    accountIndex: 13,
+  }))) states.push(state)
+
+  assert.equal(states[3].type, 'paid')
+  assert.deepEqual(calls.onceMintPaid, [])
+  assert.deepEqual(calls.checkedQuotes, ['quote-1'])
+  assert.equal(calls.websocketDisconnects, 0)
 })
 
 test('reuses a persisted quote and reconciles it during startup', async () => {
@@ -889,6 +919,152 @@ test('reuses a persisted quote and reconciles it during startup', async () => {
   assert.equal(resumedStates.at(-1).type, 'paid')
   assert.equal(calls.quoteAmounts.length, 1)
   assert.equal((await store.get('cashu-escrow-order-retry-22')).status, 'completed')
+})
+
+test('creates one mint quote across concurrent policy instances', async () => {
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  const createQuote = wallet.createMintQuoteBolt11.bind(wallet)
+  let quoteStarted
+  const started = new Promise(resolve => { quoteStarted = resolve })
+  let releaseQuote
+  const released = new Promise(resolve => { releaseQuote = resolve })
+  wallet.createMintQuoteBolt11 = async (...args) => {
+    const quote = await createQuote(...args)
+    quoteStarted()
+    await released
+    return quote
+  }
+  const options = {
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    quoteClaimPollIntervalMs: 0,
+    quoteClaimWaitTimeoutMs: 1_000,
+  }
+  const intent = createEscrowIntent(createCashuEscrowPolicy(options), {
+    tradeId: 'trade-concurrent-quote',
+    settlementId: 'order-concurrent-quote',
+    accountIndex: 30,
+  })
+  const first = createCashuEscrowPolicy(options).pay(intent)[Symbol.asyncIterator]()
+  const second = createCashuEscrowPolicy(options).pay(intent)[Symbol.asyncIterator]()
+
+  const firstState = first.next()
+  await started
+  const secondState = second.next()
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(calls.quoteAmounts.length, 1)
+  assert.equal((await store.get('cashu-escrow-order-concurrent-quote-30')).status, 'quote_requesting')
+
+  releaseQuote()
+  const [firstResult, secondResult] = await Promise.all([firstState, secondState])
+  assert.equal(firstResult.value.type, 'payment_required')
+  assert.equal(secondResult.value.type, 'payment_required')
+  assert.equal(firstResult.value.request.data.quoteId, secondResult.value.request.data.quoteId)
+  assert.equal(calls.quoteAmounts.length, 1)
+  await Promise.all([first.return(), second.return()])
+})
+
+test('never steals an expired claim after mint quote creation starts', async () => {
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  const createQuote = wallet.createMintQuoteBolt11.bind(wallet)
+  let quoteStarted
+  const started = new Promise(resolve => { quoteStarted = resolve })
+  let releaseQuote
+  const released = new Promise(resolve => { releaseQuote = resolve })
+  wallet.createMintQuoteBolt11 = async (...args) => {
+    const quote = await createQuote(...args)
+    quoteStarted()
+    await released
+    return quote
+  }
+  let now = 1_777_000_000_000
+  const options = {
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    now: () => now,
+    quoteClaimLeaseMs: 5,
+    quoteClaimPollIntervalMs: 0,
+    quoteClaimWaitTimeoutMs: 5,
+  }
+  const policy = createCashuEscrowPolicy(options)
+  const intent = createEscrowIntent(policy, {
+    tradeId: 'trade-expired-request-claim',
+    settlementId: 'order-expired-request-claim',
+    accountIndex: 31,
+  })
+  const first = policy.pay(intent)[Symbol.asyncIterator]()
+  const firstState = first.next()
+  await started
+  now += 10
+
+  await assert.rejects(async () => {
+    const competing = createCashuEscrowPolicy(options).pay(intent)[Symbol.asyncIterator]()
+    await competing.next()
+  }, /unresolved mint quote request/)
+  assert.equal(calls.quoteAmounts.length, 1)
+  assert.equal((await store.get('cashu-escrow-order-expired-request-claim-31')).status, 'quote_requesting')
+
+  releaseQuote()
+  assert.equal((await firstState).value.type, 'payment_required')
+  assert.equal(calls.quoteAmounts.length, 1)
+  await first.return()
+})
+
+test('startup fails closed after a crash loses the mint quote response', async () => {
+  const store = new MemoryCashuEscrowStore()
+  const { wallet, calls } = createMockWallet()
+  let now = 1_777_000_000_000
+  const options = {
+    mints: [mint],
+    storage: store,
+    walletFactory: () => wallet,
+    now: () => now,
+    quoteClaimLeaseMs: 5,
+  }
+  const policy = createCashuEscrowPolicy(options)
+  const intent = createEscrowIntent(policy, {
+    tradeId: 'trade-crashed-quote-request',
+    settlementId: 'order-crashed-quote-request',
+    accountIndex: 32,
+  })
+  const payment = policy.pay(intent)[Symbol.asyncIterator]()
+  assert.equal((await payment.next()).value.type, 'payment_required')
+  await payment.return()
+  assert.equal(calls.quoteAmounts.length, 1)
+
+  const recorded = await store.get('cashu-escrow-order-crashed-quote-request-32')
+  const { quoteId: _quoteId, request: _request, claim: _claim, ...withoutQuote } = recorded
+  await store.put({
+    ...withoutQuote,
+    status: 'quote_requesting',
+    revision: (recorded.revision ?? 0) + 1,
+    claim: {
+      version: 1,
+      purpose: 'mint_quote',
+      phase: 'requesting',
+      owner: 'crashed-process',
+      expiresAt: now + 5,
+    },
+  })
+  now += 10
+
+  const restarted = createCashuEscrowPolicy(options)
+  const startup = await restarted.startup({
+    highWaterMark: 0,
+    nextUnusedIndex: 1,
+    unusedWindow: 20,
+  })
+  assert.equal(startup.data.recoveryActions[0].status, 'reconciliation_required')
+  assert.equal((await store.get('cashu-escrow-order-crashed-quote-request-32')).status, 'reconciliation_required')
+  await assert.rejects(async () => {
+    for await (const state of restarted.pay(intent)) void state
+  }, /refusing to create a replacement quote/)
+  assert.equal(calls.quoteAmounts.length, 1)
 })
 
 test('fails closed when mint quote creation loses its response', async () => {

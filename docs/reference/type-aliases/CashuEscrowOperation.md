@@ -10,6 +10,12 @@
 
 ***
 
+### claim?
+
+> `optional` **claim?**: [`CashuEscrowOperationClaim`](CashuEscrowOperationClaim.md)
+
+***
+
 ### createdAt
 
 > **createdAt**: `number`
@@ -55,6 +61,14 @@
 ### request?
 
 > `optional` **request?**: `string`
+
+***
+
+### revision?
+
+> `optional` **revision?**: `number`
+
+Monotonic revision used by compareAndSet(). Legacy records imply zero.
 
 ***
 

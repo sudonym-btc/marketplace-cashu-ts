@@ -16,6 +16,42 @@
 
 ## Methods
 
+### compareAndSet()
+
+> **compareAndSet**(`id`, `expectedRevision`, `replacement`): `Promise`\<`boolean`\>
+
+Atomically replace an operation only when its current revision equals
+`expectedRevision`. The replacement revision must be
+`expectedRevision + 1`.
+
+Durable stores shared by more than one policy instance or process MUST
+implement this primitive. It lets a caller take a pre-request lease while
+ensuring only one caller can cross the quote-request point of no return.
+
+#### Parameters
+
+##### id
+
+`string`
+
+##### expectedRevision
+
+`number`
+
+##### replacement
+
+[`CashuEscrowOperation`](../type-aliases/CashuEscrowOperation.md)
+
+#### Returns
+
+`Promise`\<`boolean`\>
+
+#### Implementation of
+
+`CashuEscrowStorage.compareAndSet`
+
+***
+
 ### create()
 
 > **create**(`record`): `Promise`\<`boolean`\>

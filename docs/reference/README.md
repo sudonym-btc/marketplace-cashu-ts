@@ -20,6 +20,7 @@
 - [CashuAuctionPolicyState](type-aliases/CashuAuctionPolicyState.md)
 - [CashuDerivedKey](type-aliases/CashuDerivedKey.md)
 - [CashuEscrowOperation](type-aliases/CashuEscrowOperation.md)
+- [CashuEscrowOperationClaim](type-aliases/CashuEscrowOperationClaim.md)
 - [CashuEscrowOperationData](type-aliases/CashuEscrowOperationData.md)
 - [CashuEscrowOperationQuery](type-aliases/CashuEscrowOperationQuery.md)
 - [CashuEscrowOperationStatus](type-aliases/CashuEscrowOperationStatus.md)

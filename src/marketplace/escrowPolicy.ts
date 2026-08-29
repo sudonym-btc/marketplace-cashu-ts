@@ -24,7 +24,11 @@ import {
 } from '@sudonym-btc/marketplace-driver-interface'
 
 import { deriveCashuEscrowKey, maxCashuDerivationIndex } from '../seed.js'
-import type { CashuEscrowOperation, CashuEscrowStorage } from '../storage.js'
+import type {
+  CashuEscrowOperation,
+  CashuEscrowOperationClaim,
+  CashuEscrowStorage,
+} from '../storage.js'
 import type {
   CashuAmount,
   CashuAuctionPaymentPolicy,
@@ -88,6 +92,12 @@ export type CashuEscrowPolicyOptions = MarketplaceDriverConstructorOptions & {
   storage: CashuEscrowStorage
   quotePollIntervalMs?: number
   quotePaymentTimeoutMs?: number
+  /** Duration of the pre-request quote-creation ownership lease. */
+  quoteClaimLeaseMs?: number
+  /** Maximum time a concurrent caller waits for the quote owner to publish its result. */
+  quoteClaimWaitTimeoutMs?: number
+  /** Storage polling interval while another caller owns quote creation. */
+  quoteClaimPollIntervalMs?: number
   walletFactory?: (mint: CashuMintConfig) => Wallet
   now?: () => number
 }
@@ -97,6 +107,9 @@ export type CashuMarketplacePolicyOptions = CashuEscrowPolicyOptions
 
 const defaultPollIntervalMs = 15_000
 const defaultPaymentTimeoutMs = 20 * 60_000
+const defaultQuoteClaimLeaseMs = 60_000
+const defaultQuoteClaimWaitTimeoutMs = 60_000
+const defaultQuoteClaimPollIntervalMs = 25
 
 function logCashu(
   logger: MarketplaceDriverLogger | undefined,
@@ -230,6 +243,167 @@ function cashuEscrowRecycleTarget(
 
 function nowSeconds(now = Date.now): number {
   return Math.floor(now() / 1000)
+}
+
+function cashuOperationRevision(operation: CashuEscrowOperation): number {
+  return operation.revision ?? 0
+}
+
+function nextCashuOperation(
+  operation: CashuEscrowOperation,
+  replacement: Omit<CashuEscrowOperation, 'revision'>,
+): CashuEscrowOperation {
+  return {
+    ...replacement,
+    revision: cashuOperationRevision(operation) + 1,
+  }
+}
+
+function quoteClaimOwner(): string {
+  const value = new Uint8Array(16)
+  globalThis.crypto.getRandomValues(value)
+  return bytesToHex(value)
+}
+
+type QuoteCreationOwnership = {
+  operation: CashuEscrowOperation
+  owner: string | null
+}
+
+async function acquireQuoteCreationOwnership(input: {
+  storage: CashuEscrowStorage
+  operation: CashuEscrowOperation
+  createdByCaller: boolean
+  now: () => number
+  leaseMs: number
+  waitTimeoutMs: number
+  pollIntervalMs: number
+}): Promise<QuoteCreationOwnership> {
+  const owner = quoteClaimOwner()
+  const deadline = Date.now() + input.waitTimeoutMs
+  let operation = input.operation
+
+  while (operation.status === 'quote_created' || operation.status === 'quote_requesting') {
+    if (operation.quoteId && operation.request) return { operation, owner: null }
+    if (operation.data.quoteCreationVersion !== 1) {
+      throw new Error(
+        `Cashu operation ${operation.id} predates the exactly-once quote protocol and requires manual reconciliation`,
+      )
+    }
+
+    if (operation.status === 'quote_requesting') {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Cashu operation ${operation.id} has an unresolved mint quote request; refusing to create a replacement quote`,
+        )
+      }
+      await sleep(input.pollIntervalMs)
+      operation = await input.storage.get(operation.id) ?? operation
+      continue
+    }
+
+    if (input.storage.compareAndSet) {
+      const now = input.now()
+      const activeClaim = operation.claim
+      if (activeClaim && activeClaim.phase === 'reserved' && activeClaim.owner !== owner && activeClaim.expiresAt > now) {
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for Cashu mint quote owner for ${operation.id}`)
+        }
+        await sleep(input.pollIntervalMs)
+        operation = await input.storage.get(operation.id) ?? operation
+        continue
+      }
+
+      const reservedClaim: CashuEscrowOperationClaim = {
+        version: 1,
+        purpose: 'mint_quote',
+        phase: 'reserved',
+        owner,
+        expiresAt: now + input.leaseMs,
+      }
+      const reserved = nextCashuOperation(operation, {
+        ...operation,
+        claim: reservedClaim,
+        updatedAt: nowSeconds(input.now),
+      })
+      if (!await input.storage.compareAndSet(operation.id, cashuOperationRevision(operation), reserved)) {
+        operation = await input.storage.get(operation.id) ?? operation
+        continue
+      }
+
+      const requesting = nextCashuOperation(reserved, {
+        ...reserved,
+        status: 'quote_requesting',
+        claim: {
+          ...reservedClaim,
+          phase: 'requesting',
+          expiresAt: input.now() + input.leaseMs,
+        },
+        updatedAt: nowSeconds(input.now),
+      })
+      if (!await input.storage.compareAndSet(operation.id, cashuOperationRevision(reserved), requesting)) {
+        operation = await input.storage.get(operation.id) ?? reserved
+        continue
+      }
+      return { operation: requesting, owner }
+    }
+
+    // Atomic create() itself grants ownership to its successful caller. This
+    // path remains safe for single-owner stores, but only CAS stores can take
+    // over a pre-request claim after the original process disappears.
+    if (input.createdByCaller) {
+      const claim: CashuEscrowOperationClaim = {
+        version: 1,
+        purpose: 'mint_quote',
+        phase: 'requesting',
+        owner,
+        expiresAt: input.now() + input.leaseMs,
+      }
+      const requesting = nextCashuOperation(operation, {
+        ...operation,
+        status: 'quote_requesting',
+        claim,
+        updatedAt: nowSeconds(input.now),
+      })
+      await input.storage.put(requesting)
+      return { operation: requesting, owner }
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Cashu storage compareAndSet() is required to reclaim quote creation for ${operation.id}`,
+      )
+    }
+    await sleep(input.pollIntervalMs)
+    operation = await input.storage.get(operation.id) ?? operation
+  }
+
+  return { operation, owner: null }
+}
+
+async function persistQuoteOwnerTransition(input: {
+  storage: CashuEscrowStorage
+  operation: CashuEscrowOperation
+  owner: string
+  replacement: Omit<CashuEscrowOperation, 'revision'>
+}): Promise<CashuEscrowOperation> {
+  let current = input.operation
+  for (;;) {
+    if (current.claim?.owner !== input.owner || current.claim.phase !== 'requesting') {
+      throw new Error(`Lost Cashu mint quote ownership for ${current.id}`)
+    }
+    const replacement = nextCashuOperation(current, input.replacement)
+    if (!input.storage.compareAndSet) {
+      await input.storage.put(replacement)
+      return replacement
+    }
+    if (await input.storage.compareAndSet(current.id, cashuOperationRevision(current), replacement)) {
+      return replacement
+    }
+    const latest = await input.storage.get(current.id)
+    if (!latest) throw new Error(`Cashu operation ${current.id} disappeared while recording its mint quote`)
+    current = latest
+  }
 }
 
 function abortSleepError(): Error {
@@ -867,7 +1041,15 @@ async function waitForPaidQuote(
   options: PaidQuoteWaitOptions,
 ): Promise<MintQuoteBolt11Response> {
   if (paidMintQuote(quote)) return quote
-  const websocketWaitAvailable = typeof wallet.on?.onceMintPaid === 'function'
+  let mintSupportsWebsocket = false
+  try {
+    mintSupportsWebsocket = wallet.getMintInfo().isSupported(17).supported
+  } catch (error) {
+    logCashu(options.logger, 'debug', 'Cashu mint capability lookup failed; using quote polling', {
+      quoteId: quote.quote,
+    }, error)
+  }
+  const websocketWaitAvailable = mintSupportsWebsocket && typeof wallet.on?.onceMintPaid === 'function'
   if (!websocketWaitAvailable) return waitForPaidQuotePoll(wallet, quote, options)
 
   const abortController = new AbortController()
@@ -1470,6 +1652,18 @@ function createCashuPolicy<
 ): (Family extends 'auction' ? CashuAuctionPolicy : CashuEscrowPolicy) {
   const pollIntervalMs = options.quotePollIntervalMs ?? defaultPollIntervalMs
   const paymentTimeoutMs = options.quotePaymentTimeoutMs ?? defaultPaymentTimeoutMs
+  const quoteClaimLeaseMs = options.quoteClaimLeaseMs ?? defaultQuoteClaimLeaseMs
+  const quoteClaimWaitTimeoutMs = options.quoteClaimWaitTimeoutMs ?? defaultQuoteClaimWaitTimeoutMs
+  const quoteClaimPollIntervalMs = options.quoteClaimPollIntervalMs ?? defaultQuoteClaimPollIntervalMs
+  if (!Number.isFinite(quoteClaimLeaseMs) || quoteClaimLeaseMs <= 0) {
+    throw new Error('Cashu quote claim lease must be a positive number of milliseconds')
+  }
+  if (!Number.isFinite(quoteClaimWaitTimeoutMs) || quoteClaimWaitTimeoutMs <= 0) {
+    throw new Error('Cashu quote claim wait timeout must be a positive number of milliseconds')
+  }
+  if (!Number.isFinite(quoteClaimPollIntervalMs) || quoteClaimPollIntervalMs < 0) {
+    throw new Error('Cashu quote claim poll interval must be a non-negative number of milliseconds')
+  }
   const walletFactory = options.walletFactory ?? ((mint: CashuMintConfig) => new Wallet(mint.mintUrl, { unit: mint.unit }))
 
   class CashuPolicyImpl extends MarketplacePolicyBase<
@@ -1562,17 +1756,60 @@ function createCashuPolicy<
 
     async startup(context: CashuPolicyStartupContext) {
       const activeOperations = await options.storage.list({
-        status: ['quote_created', 'payment_required', 'minting', 'paid'],
+        status: ['quote_created', 'quote_requesting', 'payment_required', 'minting', 'paid'],
       })
       const recoveryActions: Array<Record<string, unknown>> = []
       for (const operation of activeOperations) {
         if (!operation.quoteId || !operation.request || !operation.data?.requestFingerprint) {
-          await options.storage.put({
+          if (operation.status === 'quote_created' && operation.data.quoteCreationVersion === 1) {
+            recoveryActions.push({
+              operationId: operation.id,
+              status: options.storage.compareAndSet ? 'retry_safe' : 'storage_upgrade_required',
+              reason: options.storage.compareAndSet
+                ? 'No mint quote request crossed the durable point of no return'
+                : 'compareAndSet() is required to reclaim this pre-request operation safely',
+            })
+            continue
+          }
+
+          if (
+            operation.status === 'quote_requesting' &&
+            operation.claim?.phase === 'requesting' &&
+            operation.claim.expiresAt > (options.now ?? Date.now)()
+          ) {
+            recoveryActions.push({
+              operationId: operation.id,
+              status: 'quote_request_in_progress',
+            })
+            continue
+          }
+
+          const reconciliation = nextCashuOperation(operation, {
             ...operation,
             status: 'reconciliation_required',
-            error: 'Quote creation was interrupted before a recoverable quote was recorded',
+            error: 'Quote creation was interrupted after the request point of no return; refusing to create a replacement quote automatically',
             updatedAt: nowSeconds(options.now),
           })
+          if (options.storage.compareAndSet) {
+            const reconciled = await options.storage.compareAndSet(
+              operation.id,
+              cashuOperationRevision(operation),
+              reconciliation,
+            )
+            if (!reconciled) {
+              const current = await options.storage.get(operation.id)
+              recoveryActions.push({
+                operationId: operation.id,
+                status: 'state_changed',
+                currentStatus: current?.status ?? 'missing',
+              })
+              continue
+            }
+          } else if (operation.status !== 'quote_requesting') {
+            // An unconditional write could overwrite a live quote response.
+            // Without CAS, leave quote_requesting untouched and report it.
+            await options.storage.put(reconciliation)
+          }
           recoveryActions.push({
             operationId: operation.id,
             status: 'reconciliation_required',
@@ -1797,8 +2034,10 @@ function createCashuPolicy<
         accountIndex: intent.accountIndex,
         mintUrl: resolved.mint.mintUrl,
         unit: resolved.mint.unit,
+        revision: 0,
         data: {
           version: 1,
+          quoteCreationVersion: 1,
           requestFingerprint,
           outputDerivationVersion: 1,
           policyType: spec.id,
@@ -1826,16 +2065,13 @@ function createCashuPolicy<
         updatedAt: createdAt,
       }
       let operation = existingOperation
+      let createdByCaller = false
       if (!operation) {
-        if (options.storage.create) {
-          const created = await options.storage.create(initialOperation)
-          operation = created ? initialOperation : await options.storage.get(operationId)
-        } else {
-          // Custom durable stores should implement create() for cross-process
-          // exclusion. The fallback remains safe for a single policy instance.
-          await options.storage.put(initialOperation)
-          operation = initialOperation
+        if (!options.storage.create) {
+          throw new Error('Cashu storage create() must atomically reserve an operation before mint quote creation')
         }
+        createdByCaller = await options.storage.create(initialOperation)
+        operation = createdByCaller ? initialOperation : await options.storage.get(operationId)
       }
       if (!operation) throw new Error(`Unable to reserve Cashu operation ${operationId}`)
       if (operation.data.requestFingerprint !== requestFingerprint) {
@@ -1846,6 +2082,27 @@ function createCashuPolicy<
       }
       if (operation.status === 'failed' || operation.status === 'reconciliation_required') {
         throw new Error(operation.error ?? `Cashu operation ${operationId} requires manual reconciliation`)
+      }
+
+      let quoteOwner: string | null = null
+      if (!operation.quoteId || !operation.request) {
+        const ownership = await acquireQuoteCreationOwnership({
+          storage: options.storage,
+          operation,
+          createdByCaller,
+          now: options.now ?? Date.now,
+          leaseMs: quoteClaimLeaseMs,
+          waitTimeoutMs: quoteClaimWaitTimeoutMs,
+          pollIntervalMs: quoteClaimPollIntervalMs,
+        })
+        operation = ownership.operation
+        quoteOwner = ownership.owner
+      }
+      if (operation.status === 'failed' || operation.status === 'reconciliation_required') {
+        throw new Error(operation.error ?? `Cashu operation ${operationId} requires manual reconciliation`)
+      }
+      if (operation.status === 'completed') {
+        throw new Error(`Cashu operation ${operationId} is already completed; reuse its published payment proof`)
       }
 
       let quote: MintQuoteBolt11Response
@@ -1872,30 +2129,40 @@ function createCashuPolicy<
           quoteId: quote.quote,
           operationId,
         })
-      } else if (operation.status === 'quote_created') {
+      } else if (operation.status === 'quote_requesting' && quoteOwner) {
         try {
           quote = await wallet.createMintQuoteBolt11(fundingAmount.value, description)
         } catch (error) {
-          await options.storage.put({
-            ...operation,
-            status: 'reconciliation_required',
-            error: 'Mint quote creation did not complete; refusing to create a replacement quote automatically',
-            updatedAt: nowSeconds(options.now),
+          await persistQuoteOwnerTransition({
+            storage: options.storage,
+            operation,
+            owner: quoteOwner,
+            replacement: {
+              ...operation,
+              status: 'reconciliation_required',
+              error: 'Mint quote creation did not complete; refusing to create a replacement quote automatically',
+              updatedAt: nowSeconds(options.now),
+            },
           })
           throw error
         }
-        operation = {
-          ...operation,
-          status: 'payment_required',
-          quoteId: quote.quote,
-          request: quote.request,
-          data: {
-            ...operation.data,
-            quoteExpiry: quote.expiry,
+        const { claim: _claim, ...unclaimedOperation } = operation
+        operation = await persistQuoteOwnerTransition({
+          storage: options.storage,
+          operation,
+          owner: quoteOwner,
+          replacement: {
+            ...unclaimedOperation,
+            status: 'payment_required',
+            quoteId: quote.quote,
+            request: quote.request,
+            data: {
+              ...operation.data,
+              quoteExpiry: quote.expiry,
+            },
+            updatedAt: nowSeconds(options.now),
           },
-          updatedAt: nowSeconds(options.now),
-        }
-        await options.storage.put(operation)
+        })
         logCashu(logger, 'info', 'Created Cashu mint quote requiring Lightning payment', {
           policyType: spec.id,
           mint: resolved.mint.mintUrl,

@@ -16,6 +16,24 @@
 
 `number`
 
+### quoteClaimLeaseMs?
+
+> `optional` **quoteClaimLeaseMs?**: `number`
+
+Duration of the pre-request quote-creation ownership lease.
+
+### quoteClaimPollIntervalMs?
+
+> `optional` **quoteClaimPollIntervalMs?**: `number`
+
+Storage polling interval while another caller owns quote creation.
+
+### quoteClaimWaitTimeoutMs?
+
+> `optional` **quoteClaimWaitTimeoutMs?**: `number`
+
+Maximum time a concurrent caller waits for the quote owner to publish its result.
+
 ### quotePaymentTimeoutMs?
 
 > `optional` **quotePaymentTimeoutMs?**: `number`

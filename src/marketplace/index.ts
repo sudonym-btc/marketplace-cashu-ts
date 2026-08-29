@@ -49,6 +49,7 @@ export type {
 } from '../types.js'
 export type {
   CashuEscrowOperationData,
+  CashuEscrowOperationClaim,
   CashuEscrowOperation,
   CashuEscrowOperationQuery,
   CashuEscrowOperationStatus,

@@ -102,6 +102,16 @@ Operator-attested active horizon for an auction output keyset (Unix seconds).
 
 ***
 
+### quoteCreationVersion?
+
+> `optional` **quoteCreationVersion?**: `1`
+
+Versioned marker proving `quote_created` was persisted before any mint
+quote request was attempted. Records without this marker predate the
+exactly-once claim protocol and must not be retried automatically.
+
+***
+
 ### quoteExpiry?
 
 > `optional` **quoteExpiry?**: `number` \| `null`

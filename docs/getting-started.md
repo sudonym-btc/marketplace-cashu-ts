@@ -72,10 +72,21 @@ const api = marketplace.bind(pool, relays, {
 ## Recover payment state
 
 Cashu proofs and prepared settlement packets contain bearer value. The policies
-require whole-proof sealing before publication. In-flight quotes
-resume through the supplied storage implementation; the store retains only
-public recovery metadata and never completed proofs or seeds. Implement atomic
-`create()` in durable stores used by multiple processes.
+require whole-proof sealing before publication. In-flight quotes resume through
+the supplied storage implementation; the store retains only public recovery
+metadata and never completed proofs or seeds. Durable stores must implement
+atomic `create()`. Stores shared by policy instances, tabs, or processes must
+also implement `compareAndSet(id, expectedRevision, replacement)` as a
+transaction: update only when the current revision matches, and require the
+replacement revision to be exactly one greater.
+
+Quote creation uses a two-phase durable claim. A lease can be replaced only
+while the record remains `quote_created`, which proves no mint request began.
+The owner persists `quote_requesting` before mint I/O; that state is never
+automatically stolen or retried, even after its lease expires, because a process
+could have died after the mint accepted the request. Startup surfaces that
+uncertainty for reconciliation instead of opening a duplicate quote. Claim
+records contain only a random owner token, phase, expiry, and revision.
 
 Startup reconciles active quote states with the mint. Retrying the same payment
 intent reuses its quote and deterministically reconstructs mint outputs, which
