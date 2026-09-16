@@ -2,7 +2,7 @@
 
 Nostr-agnostic Cashu payment policy package for marketplace escrow flows.
 
-Requires Node.js 22.4 or newer. NMDK aggregate development uses Node.js 24.
+Requires Node.js 22.4 or newer. NMDK aggregate development uses Node.js 26.
 
 ## Docs
 

@@ -1362,13 +1362,13 @@ function validatedCashuRefundSwap(
   if (sendOutputs.length === 0) throw new Error('Cashu refund swap has no buyer outputs')
   const sigAllOutputs = [...(swap.keepOutputs ?? []), ...sendOutputs]
     .map(output => output.blindedMessage)
-  const currentDigest = SigAll.computeDigests(swap.inputs, sigAllOutputs).current
+  const digest = SigAll.computeDigests(swap.inputs, sigAllOutputs).v0
   const buyerPubkey = hexToBytes(sourceData.participants.buyerPubkey)
   const buyerXOnly = buyerPubkey.length === 33 ? buyerPubkey.slice(1) : buyerPubkey
   const buyerSignatures = getP2PKWitnessSignatures(swap.inputs[0]?.witness)
   if (!buyerSignatures.some(signature => schnorr.verify(
     hexToBytes(signature),
-    hexToBytes(currentDigest),
+    hexToBytes(digest),
     buyerXOnly,
   ))) {
     throw new Error('Cashu refund swap is missing the buyer SIG_ALL authorization')

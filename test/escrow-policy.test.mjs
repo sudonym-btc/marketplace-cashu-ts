@@ -6,7 +6,6 @@ import {
   MintQuoteState,
   OutputData,
   SigAll,
-  createP2PKsecret,
   deserializeProofs,
   parseP2PKSecret,
   serializeProofs,
@@ -49,19 +48,6 @@ const mint = {
 // therefore models a valid blind signature for the unit tests.
 const mockMintPublicKey = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
 
-function p2pkSecretFromOptions(options) {
-  const lockKeys = Array.isArray(options.pubkey) ? options.pubkey : [options.pubkey]
-  const tags = []
-  if (Number.isSafeInteger(options.locktime)) tags.push(['locktime', String(options.locktime)])
-  if (lockKeys.length > 1) tags.push(['pubkeys', ...lockKeys.slice(1)])
-  if (options.requiredSignatures > 1) tags.push(['n_sigs', String(options.requiredSignatures)])
-  if (options.refundKeys?.length) tags.push(['refund', ...options.refundKeys])
-  if (options.requiredRefundSignatures > 1) tags.push(['n_sigs_refund', String(options.requiredRefundSignatures)])
-  if (options.sigFlag) tags.push(['sigflag', options.sigFlag])
-  if (options.additionalTags?.length) tags.push(...options.additionalTags)
-  return createP2PKsecret(lockKeys[0], tags)
-}
-
 function createMockWallet(options = {}) {
   const supportedNuts = new Set(options.supportedNuts ?? [9, 11])
   const calls = {
@@ -83,15 +69,9 @@ function createMockWallet(options = {}) {
     restoredMintCount: 0,
     websocketDisconnects: 0,
   }
-  const mockOutput = (amount, p2pkOptions) => ({
-    blindedMessage: {
-      amount: Amount.from(amount),
-      B_: `02${'2'.repeat(64)}`,
-      id: '009a1f293253e41e',
-    },
-    blindingFactor: 1n,
-    secret: new TextEncoder().encode(p2pkSecretFromOptions(p2pkOptions)),
-  })
+  const mockOutput = (amount, p2pkOptions) => OutputData.createSingleP2PKData(
+    p2pkOptions, amount, '009a1f293253e41e',
+  )
   const wallet = {
     async loadMint() {},
     defaultOutputType() {
@@ -263,7 +243,7 @@ function createMockWallet(options = {}) {
       const digest = SigAll.computeDigests(
         proofs,
         outputs.map(output => output.blindedMessage),
-      ).current
+      ).v0
       const signature = SigAll.signDigest(digest, privateKey)
       return proofs.map((proof, index) => index === 0
         ? { ...proof, witness: { signatures: [signature] } }
